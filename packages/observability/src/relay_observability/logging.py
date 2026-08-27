@@ -4,7 +4,11 @@ import logging
 import sys
 import time
 
-_context: contextvars.ContextVar[dict] = contextvars.ContextVar("log_context", default={})
+# Default is None, not {}: a mutable default is shared by every context, so a
+# single caller mutating it in place would poison logging process-wide.
+_context: contextvars.ContextVar[dict[str, object] | None] = contextvars.ContextVar(
+    "log_context", default=None
+)
 
 _STANDARD_ATTRS = set(logging.makeLogRecord({}).__dict__)
 
@@ -19,7 +23,7 @@ class JSONFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
-            **_context.get(),
+            **(_context.get() or {}),
             **extras,
         }
         if record.exc_info:
@@ -36,10 +40,10 @@ def configure_logging(level: str = "INFO") -> None:
 
 
 def bind_context(**fields: object) -> None:
-    current = dict(_context.get())
+    current = dict(_context.get() or {})
     current.update(fields)
     _context.set(current)
 
 
 def clear_context() -> None:
-    _context.set({})
+    _context.set(None)

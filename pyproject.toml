@@ -27,6 +27,17 @@ python_version = "3.12"
 strict = true
 namespace_packages = true
 explicit_package_bases = true
+plugins = ["pydantic.mypy"]
+# Anchors each src/ layout dir as a package root, so a file reached by
+# `mypy .` walking the tree resolves to the same dotted module name as
+# when it's reached through an editable-installed import (relay_x.y) —
+# without this, mypy sees the same file as two different modules.
+mypy_path = [
+    "apps/api/src",
+    "apps/worker/src",
+    "packages/domain/src",
+    "packages/observability/src",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
