@@ -109,23 +109,28 @@ class ProjectContext:                # project routes: /v1/projects/{project_id}
 
 An **API key belongs to exactly one project**, so it carries its own tenant and yields a `ProjectContext` in one lookup — no org or project id in the URL. A **JWT** identifies a global user, so the project comes from the path, and resolution verifies membership *and* that `project.org_id` matches. Both doors, one shape downstream.
 
-**Scoping enforced below the middleware.** The spec forbids leaving this to discipline, so tenancy is structural twice over — a repository cannot be constructed without a scope, and Postgres RLS double-checks:
+**Scoping enforced below the middleware.** The spec forbids leaving this to discipline, so tenancy is structural twice over — a repository cannot be constructed without a scope, and Postgres RLS double-checks. Built and verified against real Postgres (`packages/db/src/relay_db/unit_of_work.py`) — one class, not two, since a project-scoped unit of work always knows its org too:
 
 ```python
 class TenantUnitOfWork:
-    def __init__(self, session: AsyncSession, ctx: ProjectContext):
-        self.session, self.ctx = session, ctx
-        self.jobs = JobRepo(self)         # repos read scope off the UoW —
-        self.api_keys = ApiKeyRepo(self)  # there is no unscoped constructor
+    def __init__(self, session: AsyncSession, *, org_id: UUID, project_id: UUID | None = None):
+        self.session, self.org_id, self.project_id = session, org_id, project_id
+        self.projects = ProjectRepo(self)   # repos read scope off the UoW —
+        self.memberships = MembershipRepo(self)  # there is no unscoped constructor
 
     async def __aenter__(self) -> "TenantUnitOfWork":
-        await self.session.execute(
-            text("SET LOCAL app.org_id = :o, app.project_id = :p"),
-            {"o": str(self.ctx.org_id), "p": str(self.ctx.project_id)})
+        # SET LOCAL rejects bind parameters outright — verified directly:
+        # asyncpg sends "$1", Postgres errors, because SET is a utility
+        # statement that never goes through parameter binding. Safe to
+        # interpolate here specifically because both values are uuid.UUID,
+        # never raw user input.
+        await self.session.execute(text(f"SET LOCAL app.org_id = '{self.org_id}'"))
+        if self.project_id is not None:
+            await self.session.execute(text(f"SET LOCAL app.project_id = '{self.project_id}'"))
         return self
 ```
 
-RLS applies at whichever tier owns the row — `projects`, `org_memberships`, `invitations` use `USING (org_id = current_setting('app.org_id')::uuid)`; `jobs`, `attempts`, `api_keys` and every queue table use `project_id`. Control loops connect as a bypass role.
+RLS applies at whichever tier owns the row — `projects`, `org_memberships`, `invitations`, `audit_log` use `USING (org_id = NULLIF(current_setting('app.org_id', true), '')::uuid)`; `memberships` and `api_keys` use `project_id`. The `NULLIF` matters: once a custom GUC is touched anywhere in a session, letting that transaction end reverts it to `''`, not `NULL` — verified directly, and without the `NULLIF` a connection that forgets to scope raises a cast error instead of failing closed. `organizations`' own policy is self-referential (`id = ...`), which has a real consequence: the RLS-restricted role can never discover "does any org exist?" without already knowing its id — bootstrap uses a separate admin connection for exactly this reason (`packages/db/src/relay_db/bootstrap.py`). Control loops connect as a bypass role.
 
 **Refresh rotation with reuse detection:**
 
