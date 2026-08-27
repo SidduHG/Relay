@@ -16,11 +16,11 @@ jobs:
       - run: uv run mypy .
       - run: uv run pytest
 
-  dashboard:
+  frontend:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: apps/dashboard
+        working-directory: apps/frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

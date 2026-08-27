@@ -58,14 +58,14 @@ services:
       - ../../apps/worker:/app/apps/worker
       - ../../packages:/app/packages
 
-  dashboard:
+  frontend:
     build:
       context: ../..
-      dockerfile: apps/dashboard/Dockerfile
+      dockerfile: apps/frontend/Dockerfile
     ports:
       - "5173:5173"
     volumes:
-      - ../../apps/dashboard:/app
+      - ../../apps/frontend:/app
       - /app/node_modules
     depends_on:
       - api
