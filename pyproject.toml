@@ -5,7 +5,7 @@ description = "RELAY — self-hosted distributed job queue"
 requires-python = ">=3.12"
 
 [tool.uv.workspace]
-members = ["apps/api", "apps/worker", "packages/domain", "packages/observability"]
+members = ["apps/api", "apps/worker", "packages/domain", "packages/observability", "packages/security"]
 
 [dependency-groups]
 dev = [
@@ -37,6 +37,7 @@ mypy_path = [
     "apps/worker/src",
     "packages/domain/src",
     "packages/observability/src",
+    "packages/security/src",
 ]
 
 [tool.pytest.ini_options]
