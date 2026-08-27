@@ -3,6 +3,11 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+
+# Importing relay_db.models registers every model on Base.metadata — this
+# is what lets --autogenerate diff "what the models say" against "what
+# Postgres actually has."
+from relay_db.models import Base
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -12,13 +17,14 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Set once packages/db models exist (F2). Empty for now — F0 wires the
-# migration path, it doesn't have anything to migrate yet.
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    return os.environ["DATABASE_URL"]
+    # Migrations need real DDL privileges (CREATE TABLE, ALTER TYPE, ...)
+    # that DATABASE_URL's restricted relay_app role deliberately doesn't
+    # have — see config/.env.example.
+    return os.environ["DATABASE_ADMIN_URL"]
 
 
 def run_migrations_offline() -> None:

@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "relay",
     "relay-api",
+    "relay-db",
     "relay-domain",
     "relay-observability",
     "relay-security",
@@ -900,7 +901,10 @@ dependencies = [
     { name = "fastapi" },
     { name = "pydantic-settings" },
     { name = "redis" },
+    { name = "relay-db" },
+    { name = "relay-domain" },
     { name = "relay-observability" },
+    { name = "relay-security" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -912,9 +916,29 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "redis", specifier = ">=5.0" },
+    { name = "relay-db", editable = "packages/db" },
+    { name = "relay-domain", editable = "packages/domain" },
     { name = "relay-observability", editable = "packages/observability" },
+    { name = "relay-security", editable = "packages/security" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+]
+
+[[package]]
+name = "relay-db"
+version = "0.1.0"
+source = { editable = "packages/db" }
+dependencies = [
+    { name = "asyncpg" },
+    { name = "relay-domain" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asyncpg", specifier = ">=0.29" },
+    { name = "relay-domain", editable = "packages/domain" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
 ]
 
 [[package]]

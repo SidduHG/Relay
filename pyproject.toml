@@ -5,7 +5,7 @@ description = "RELAY — self-hosted distributed job queue"
 requires-python = ">=3.12"
 
 [tool.uv.workspace]
-members = ["apps/api", "apps/worker", "packages/domain", "packages/observability", "packages/security"]
+members = ["apps/api", "apps/worker", "packages/db", "packages/domain", "packages/observability", "packages/security"]
 
 [dependency-groups]
 dev = [
@@ -18,6 +18,10 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Alembic autogenerates these in its own style (unwrapped lines,
+# Union[]/Optional instead of |) — every future migration would hit the
+# same style errors, so hand-fixing generated output isn't worth it.
+extend-exclude = ["migrations/versions/*.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -35,10 +39,18 @@ plugins = ["pydantic.mypy"]
 mypy_path = [
     "apps/api/src",
     "apps/worker/src",
+    "packages/db/src",
     "packages/domain/src",
     "packages/observability/src",
     "packages/security/src",
 ]
+
+[[tool.mypy.overrides]]
+# asyncpg ships no py.typed marker / stubs (a real gap in the package
+# itself, not ours to fix) — only used directly in test code; app code
+# goes through SQLAlchemy's async engine, which is fully typed.
+module = "asyncpg.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

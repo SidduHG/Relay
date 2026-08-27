@@ -8,10 +8,38 @@ on:
 jobs:
   python:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+          POSTGRES_DB: relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # A GitHub Actions service container is a bare image — it does not
+      # run infra/postgres/init/ the way local Docker Compose does (that
+      # only happens via a bind-mounted docker-entrypoint-initdb.d, which
+      # a service container has no equivalent for), so the app role is
+      # created explicitly as a step below instead.
+      DATABASE_ADMIN_URL: postgresql+asyncpg://relay:relay@localhost:5432/relay
+      DATABASE_URL: postgresql+asyncpg://relay_app:relay_app@localhost:5432/relay
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
-      - run: uv sync --all-extras --dev
+      # uv sync alone only installs the root project's own dependencies
+      # (ruff/mypy/pytest) — not apps/api, packages/domain, etc. Missing
+      # --all-packages here was a real bug: every workspace import failed
+      # and every test collection error looked like a missing module.
+      - run: uv sync --all-packages
+      - run: PGPASSWORD=relay psql -h localhost -U relay -d relay -f infra/postgres/init/01-app-role.sql
+      - run: uv run --project apps/api alembic -c migrations/alembic.ini upgrade head
       - run: uv run ruff check .
       - run: uv run mypy .
       - run: uv run pytest

@@ -12,10 +12,16 @@ dependencies = [
     "alembic>=1.13",
     "redis>=5.0",
     "relay-observability",
+    "relay-db",
+    "relay-domain",
+    "relay-security",
 ]
 
 [tool.uv.sources]
 relay-observability = { workspace = true }
+relay-db = { workspace = true }
+relay-domain = { workspace = true }
+relay-security = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

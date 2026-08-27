@@ -4,7 +4,7 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 COPY pyproject.toml /app/pyproject.toml
-COPY packages/observability /app/packages/observability
+COPY packages /app/packages
 COPY apps/api /app/apps/api
 
 WORKDIR /app/apps/api
