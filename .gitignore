@@ -1,1 +1,29 @@
 RELAY-production-folder-structure.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+uv.lock
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Env
+.env
+.env.*
+!config/*.env.example
+!*.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
