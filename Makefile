@@ -1,4 +1,7 @@
-.PHONY: up down logs test lint migrate load chaos
+.PHONY: install up down logs test lint migrate load chaos
+
+install:
+	uv sync --all-packages
 
 up:
 	docker compose -f infra/compose/docker-compose.yml up --build
@@ -9,10 +12,10 @@ down:
 logs:
 	docker compose -f infra/compose/docker-compose.yml logs -f
 
-test:
+test: install
 	uv run pytest
 
-lint:
+lint: install
 	uv run ruff check .
 	uv run mypy .
 

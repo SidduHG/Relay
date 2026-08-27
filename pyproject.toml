@@ -5,7 +5,7 @@ description = "RELAY — self-hosted distributed job queue"
 requires-python = ">=3.12"
 
 [tool.uv.workspace]
-members = ["apps/api", "apps/worker", "packages/observability"]
+members = ["apps/api", "apps/worker", "packages/domain", "packages/observability"]
 
 [dependency-groups]
 dev = [
