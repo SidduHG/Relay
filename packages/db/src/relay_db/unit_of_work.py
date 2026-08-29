@@ -15,6 +15,17 @@ sets both GUCs together; an org-level operation (list this org's
 projects) just leaves project_id unset, which correctly makes every
 project-scoped table invisible for that request — an org-level operation
 has no business touching them anyway.
+
+org_id is optional for the same reason project_id already was: signup
+and login (services/auth_service.py) touch only users and refresh_tokens
+— both global, with no RLS policy at all — and forcing them through a
+throwaway org_id to satisfy this constructor would be worse than
+useless: a meaningless UUID sitting in the constructor is exactly the
+kind of thing that hides a real mistake later, if an org-scoped
+operation ever got added to a signup flow and nobody noticed the org_id
+was fake. Leaving it unset makes every org/project-scoped table
+correctly invisible, the identical fail-closed behavior already proven
+for an unset project_id.
 """
 
 import uuid
@@ -24,6 +35,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay_db.repositories.api_keys import ApiKeyRepo
+from relay_db.repositories.audit import AuditRepo
+from relay_db.repositories.invitations import InvitationRepo
 from relay_db.repositories.memberships import MembershipRepo, OrgMembershipRepo
 from relay_db.repositories.projects import ProjectRepo
 from relay_db.repositories.refresh_tokens import RefreshTokenRepo
@@ -35,7 +48,7 @@ class TenantUnitOfWork:
         self,
         session: AsyncSession,
         *,
-        org_id: uuid.UUID,
+        org_id: uuid.UUID | None = None,
         project_id: uuid.UUID | None = None,
     ) -> None:
         self.session = session
@@ -48,6 +61,8 @@ class TenantUnitOfWork:
         self.projects = ProjectRepo(self)
         self.refresh_tokens = RefreshTokenRepo(self)
         self.api_keys = ApiKeyRepo(self)
+        self.invitations = InvitationRepo(self)
+        self.audit = AuditRepo(self)
 
     async def __aenter__(self) -> "TenantUnitOfWork":
         # SET LOCAL rejects bind parameters outright — verified directly
@@ -56,7 +71,8 @@ class TenantUnitOfWork:
         # parameter binding). Interpolating is safe here specifically
         # because org_id/project_id are uuid.UUID, never raw user input:
         # str(UUID) always renders as the fixed hex-dash form.
-        await self.session.execute(text(f"SET LOCAL app.org_id = '{self.org_id}'"))
+        if self.org_id is not None:
+            await self.session.execute(text(f"SET LOCAL app.org_id = '{self.org_id}'"))
         if self.project_id is not None:
             await self.session.execute(text(f"SET LOCAL app.project_id = '{self.project_id}'"))
         return self

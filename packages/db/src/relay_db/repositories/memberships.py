@@ -5,10 +5,12 @@ see relay_domain's Membership entity docstring for why.
 """
 
 import uuid
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from relay_domain.enums.role import OrgRole, Role
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select, update
 
 from relay_db.models.membership import Membership, OrgMembership
 
@@ -34,6 +36,20 @@ class OrgMembershipRepo:
         await self._uow.session.flush()
         return membership
 
+    async def list_all(self) -> Sequence[OrgMembership]:
+        result = await self._uow.session.scalars(select(OrgMembership))
+        return result.all()
+
+    async def update_role(self, user_id: uuid.UUID, role: OrgRole) -> None:
+        await self._uow.session.execute(
+            update(OrgMembership).where(OrgMembership.user_id == user_id).values(role=role)
+        )
+
+    async def delete(self, user_id: uuid.UUID) -> None:
+        await self._uow.session.execute(
+            sa_delete(OrgMembership).where(OrgMembership.user_id == user_id)
+        )
+
 
 class MembershipRepo:
     def __init__(self, uow: "TenantUnitOfWork") -> None:
@@ -58,3 +74,17 @@ class MembershipRepo:
         self._uow.session.add(membership)
         await self._uow.session.flush()
         return membership
+
+    async def list_all(self) -> Sequence[Membership]:
+        result = await self._uow.session.scalars(select(Membership))
+        return result.all()
+
+    async def update_role(self, user_id: uuid.UUID, role: Role) -> None:
+        await self._uow.session.execute(
+            update(Membership).where(Membership.user_id == user_id).values(role=role)
+        )
+
+    async def delete(self, user_id: uuid.UUID) -> None:
+        await self._uow.session.execute(
+            sa_delete(Membership).where(Membership.user_id == user_id)
+        )

@@ -75,7 +75,8 @@ Platform (RELAY staff)          ← NOT BUILT. separate auth system entirely. se
 | api | `apps/api/.../auth/tenancy.py` | reads `Authorization`, resolves org + project, builds the contexts — no separate `middleware/auth.py`: once header-parsing and `Identity` resolution were written there was no non-trivial logic left over for it; it would be a one-line `Depends()` wrapper, which belongs with Task 11's route wiring instead |
 | api | `apps/api/.../middleware/rate_limit.py` | aggressive limits on login + key auth |
 | api | `apps/api/.../schemas/{auth,project}.py` | request/response models |
-| api | `apps/api/.../services/project_service.py` | project CRUD, invites, accept, role change, remove |
+| api | `apps/api/.../services/auth_service.py` | signup, login — not in the original file list; didn't fit jwt.py (token mechanics, not accounts) or project_service.py (org/project membership, not accounts). login() compares against a fixed dummy bcrypt hash when no user is found, verified directly: a naive version returns in ~0.002ms for an unknown email vs ~210ms for a known one with the wrong password, a trivial timing side-channel for enumerating registered emails even behind an identical error message |
+| api | `apps/api/.../services/project_service.py` | project CRUD, invites, accept, self-grant, role change, remove — every mutating function also writes an `audit_log` entry, pulled forward from Task 13 specifically because the plan states the org self-grant "is an audited event" as a safety property of that capability, not an add-on; `packages/db/repositories/audit.py` is write-only, just enough for this |
 | api | `apps/api/.../api/v1/auth.py` | signup, login, refresh, logout, API keys |
 | api | `apps/api/.../api/v1/projects.py` | orgs, projects, members, invitations |
 | api | `apps/api/.../api/deps.py` | `get_identity()`, `get_org_ctx()`, `get_project_ctx()` |
@@ -193,7 +194,7 @@ F1 builds the org *tier*, not the SaaS *product*. Everything below is deliberate
 7. `auth/api_keys.py` — issue/revoke (project-scoped UoW), verify (raw admin session — see file table), overlap rotation proved end to end: both keys valid, then old revoked while new keeps working
 8. `auth/permissions.py` + `auth/rbac.py` — both matrices (with monotonicity tests: no higher-ranked role may lack a permission a lower-ranked one has), `require_org`/`require_project` as plain, framework-agnostic checks — matching jwt.py/api_keys.py's pattern of raising rather than assuming HTTP, since the route layer (Task 11) is what turns a denial into a 403
 9. `auth/tenancy.py` — both paths → `Identity` → contexts; proved live against real Postgres all three of F1's "done when" bars at once: cross-project 404, cross-org 404, and an OrgAdmin with no project membership getting 404 on that project
-10. `services/project_service.py` — org + project invites, accept, role change, escalation guards
+10. `services/auth_service.py` (signup, login) + `services/project_service.py` — org + project invites, accept, self-grant, role change, remove, every escalation guard proved live including the last-owner guard (needs a two-owner sequence to exercise honestly: an owner can never act on their own role). `packages/db/unit_of_work.py`'s `org_id` became optional alongside `project_id` — signup/login touch only global tables (`users`, `refresh_tokens`) and have no org to scope by yet
 11. Routes `api/v1/auth.py` + `api/v1/projects.py`, wired into `api/router.py`
 12. `middleware/rate_limit.py` — per-IP *and* per-email on login (stops spray and targeted brute force)
 13. Audit writes on every privileged action, including OrgAdmin self-grants; verify append-only
