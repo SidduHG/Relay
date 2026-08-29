@@ -68,8 +68,7 @@ Platform (RELAY staff)          ← NOT BUILT. separate auth system entirely. se
 | db | `packages/db/.../models/*.py` | the nine tables above |
 | db | `packages/db/.../repositories/*.py` | one per table; **all take a scoped UoW** |
 | db | `packages/db/.../unit_of_work.py` | `OrgUnitOfWork` / `TenantUnitOfWork` — the scoping chokepoints |
-| api | `apps/api/.../auth/password.py` | hash + verify, constant-time |
-| api | `apps/api/.../auth/jwt.py` | 15-min access token, rotating refresh with reuse detection |
+| api | `apps/api/.../auth/jwt.py` | 15-min access token, rotating refresh with reuse detection — no separate `auth/password.py`: `packages/security/hashing.py` already has `hash_password`/`verify_password`, and a wrapper adding no logic would be pure indirection; services import it directly |
 | api | `apps/api/.../auth/api_keys.py` | issue, verify, rotate-with-overlap, `last_used_at` |
 | api | `apps/api/.../auth/permissions.py` | `Permission` enum + both role→permission matrices |
 | api | `apps/api/.../auth/rbac.py` | `require_org(*perms)` / `require_project(*perms)` |
@@ -189,7 +188,7 @@ F1 builds the org *tier*, not the SaaS *product*. Everything below is deliberate
 3. Models + migrations `0001`, `0002`, including both tiers of RLS policy
 4. Bootstrap: a fresh deployment auto-creates one `organizations` row (single-org mode)
 5. `OrgUnitOfWork` / `TenantUnitOfWork` + repositories — **write the isolation tests here, before any routes**
-6. `auth/password.py`, `auth/jwt.py` (unit-test rotation and reuse with a fake clock)
+6. `auth/jwt.py` — access tokens plus refresh issue/rotate, unit-tested for expiry with an explicit `now` param (no clock monkeypatching); rotation/reuse-detection integration-tested against real Postgres since it touches `refresh_tokens`
 7. `auth/api_keys.py` — issue, verify, overlap rotation
 8. `auth/permissions.py` + `auth/rbac.py` — both matrices, both dependencies
 9. `auth/tenancy.py` + `middleware/auth.py` — both paths → `Identity` → contexts

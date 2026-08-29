@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay_db.repositories.memberships import MembershipRepo, OrgMembershipRepo
 from relay_db.repositories.projects import ProjectRepo
+from relay_db.repositories.refresh_tokens import RefreshTokenRepo
 from relay_db.repositories.users import UserRepo
 
 
@@ -44,6 +45,7 @@ class TenantUnitOfWork:
         self.org_memberships = OrgMembershipRepo(self)
         self.memberships = MembershipRepo(self)
         self.projects = ProjectRepo(self)
+        self.refresh_tokens = RefreshTokenRepo(self)
 
     async def __aenter__(self) -> "TenantUnitOfWork":
         # SET LOCAL rejects bind parameters outright — verified directly

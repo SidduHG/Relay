@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,7 +7,11 @@ class Settings(BaseSettings):
 
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    api_secret_key: str
+    # 32 bytes is HS256's own recommended floor (RFC 7518 §3.2) — PyJWT
+    # warns at import time below it. Enforced here instead of discovered
+    # via a runtime warning: a short secret should fail loudly on boot,
+    # matching F0's rule for any other missing/invalid config.
+    api_secret_key: str = Field(min_length=32)
     api_env: str = "development"
     log_level: str = "INFO"
 
