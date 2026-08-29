@@ -71,7 +71,7 @@ Platform (RELAY staff)          ← NOT BUILT. separate auth system entirely. se
 | api | `apps/api/.../auth/jwt.py` | 15-min access token, rotating refresh with reuse detection — no separate `auth/password.py`: `packages/security/hashing.py` already has `hash_password`/`verify_password`, and a wrapper adding no logic would be pure indirection; services import it directly |
 | api | `apps/api/.../auth/api_keys.py` | issue/revoke through the normal project-scoped UoW; `verify` takes a raw admin session instead — `api_keys` is RLS-scoped by `project_id`, so a project-scoped connection structurally cannot find a key before knowing which project it belongs to (same self-reference problem as `organizations` in Task 4, proved live again here) |
 | api | `apps/api/.../auth/permissions.py` | `Permission` enum + both role→permission matrices |
-| api | `apps/api/.../auth/rbac.py` | `require_org(*perms)` / `require_project(*perms)` |
+| api | `apps/api/.../auth/rbac.py` | `require_org(role, *perms)` / `require_project(role, *perms)` — plain functions taking an already-resolved role, not yet wired to FastAPI `Depends()`; that needs a role to depend *on*, which is Task 9's job |
 | api | `apps/api/.../auth/tenancy.py` | resolves org + project, builds the contexts |
 | api | `apps/api/.../middleware/auth.py` | reads `Authorization`, routes to JWT or API-key path |
 | api | `apps/api/.../middleware/rate_limit.py` | aggressive limits on login + key auth |
@@ -190,7 +190,7 @@ F1 builds the org *tier*, not the SaaS *product*. Everything below is deliberate
 5. `OrgUnitOfWork` / `TenantUnitOfWork` + repositories — **write the isolation tests here, before any routes**
 6. `auth/jwt.py` — access tokens plus refresh issue/rotate, unit-tested for expiry with an explicit `now` param (no clock monkeypatching); rotation/reuse-detection integration-tested against real Postgres since it touches `refresh_tokens`
 7. `auth/api_keys.py` — issue/revoke (project-scoped UoW), verify (raw admin session — see file table), overlap rotation proved end to end: both keys valid, then old revoked while new keeps working
-8. `auth/permissions.py` + `auth/rbac.py` — both matrices, both dependencies
+8. `auth/permissions.py` + `auth/rbac.py` — both matrices (with monotonicity tests: no higher-ranked role may lack a permission a lower-ranked one has), `require_org`/`require_project` as plain, framework-agnostic checks — matching jwt.py/api_keys.py's pattern of raising rather than assuming HTTP, since the route layer (Task 11) is what turns a denial into a 403
 9. `auth/tenancy.py` + `middleware/auth.py` — both paths → `Identity` → contexts
 10. `services/project_service.py` — org + project invites, accept, role change, escalation guards
 11. Routes `api/v1/auth.py` + `api/v1/projects.py`, wired into `api/router.py`
