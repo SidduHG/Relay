@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from relay_api.auth.permissions import Permission
 from relay_api.auth.rbac import require_org, require_project
 from relay_api.auth.tenancy import OrgContext, ProjectContext
+from relay_api.services.auth_service import InvalidEmailError
 from relay_db.models.invitation import Invitation
 from relay_db.models.user import User
 from relay_db.unit_of_work import TenantUnitOfWork
@@ -34,10 +35,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 INVITATION_TTL = timedelta(days=7)
-
-
-class InvalidEmailError(Exception):
-    pass
 
 
 class EscalationError(Exception):

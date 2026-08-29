@@ -1,9 +1,15 @@
 """FastAPI startup/shutdown orchestration.
 
-Two engines exist here, briefly, for one reason: bootstrap needs elevated
-access (see config.py's database_admin_url), everything after it doesn't
-and shouldn't have that access. The admin engine lives only for the
-duration of bootstrap and is disposed immediately after.
+Two engines live for the app's whole lifetime, not just bootstrap. The
+admin engine was originally disposed right after bootstrap — but by
+Task 11, verify_api_key, tenancy.py's project-context resolution (the
+`projects` self-reference), and invitation-token lookup all need a live
+admin session on every authenticated request, the same structural
+pattern bootstrap.py hit with organizations. Every authenticated request
+now opens both an admin session (briefly, for whichever pre-tenant
+lookup it needs) and an app session (for the properly RLS-scoped work)
+— two lightweight pooled connections, not two new TCP connections each
+time.
 """
 
 import logging
@@ -27,12 +33,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         org = await ensure_default_organization(
             session, name=settings.default_org_name, slug=settings.default_org_slug
         )
-    await admin_engine.dispose()
     logger.info("startup complete", extra={"org_id": str(org.id), "org_slug": org.slug})
+
+    app.state.admin_sessions = admin_sessions
 
     engine = create_engine(settings.database_url)
     app.state.db_sessions = create_session_factory(engine)
 
     yield
 
+    await admin_engine.dispose()
     await engine.dispose()

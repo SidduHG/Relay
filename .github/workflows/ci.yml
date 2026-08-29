@@ -30,6 +30,13 @@ jobs:
       # created explicitly as a step below instead.
       DATABASE_ADMIN_URL: postgresql+asyncpg://relay:relay@localhost:5432/relay
       DATABASE_URL: postgresql+asyncpg://relay_app:relay_app@localhost:5432/relay
+      # Both required for apps/api/tests/integration/test_http_e2e.py to
+      # actually run instead of skipping silently — relay_api.main builds
+      # its Settings() singleton at import time and needs both present.
+      # No Redis service container yet: Settings only requires the value
+      # be set, nothing in the app connects to it before F2.
+      REDIS_URL: redis://localhost:6379/0
+      API_SECRET_KEY: ci-only-secret-key-at-least-32-bytes-long
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3

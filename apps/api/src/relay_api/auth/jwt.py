@@ -132,3 +132,18 @@ async def rotate(
     return await issue_pair(
         uow, row.user_id, secret_key=secret_key, family_id=row.family_id, now=current_time
     )
+
+
+async def logout(
+    uow: "TenantUnitOfWork", presented_refresh_token: str, *, now: datetime | None = None
+) -> None:
+    """Revokes the presented token's whole family without issuing a
+    replacement — unlike rotate(), which always mints a new pair on
+    success. Deliberately idempotent: an unknown or already-revoked
+    token still "succeeds," since the caller's desired end state (not
+    logged in) is already true either way — logout is not the place to
+    make that distinction."""
+    current_time = now or datetime.now(UTC)
+    row = await uow.refresh_tokens.get_by_hash(hash_token(presented_refresh_token))
+    if row is not None:
+        await uow.refresh_tokens.revoke_family(row.family_id, now=current_time)
