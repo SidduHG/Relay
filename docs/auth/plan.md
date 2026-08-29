@@ -72,8 +72,7 @@ Platform (RELAY staff)          ← NOT BUILT. separate auth system entirely. se
 | api | `apps/api/.../auth/api_keys.py` | issue/revoke through the normal project-scoped UoW; `verify` takes a raw admin session instead — `api_keys` is RLS-scoped by `project_id`, so a project-scoped connection structurally cannot find a key before knowing which project it belongs to (same self-reference problem as `organizations` in Task 4, proved live again here) |
 | api | `apps/api/.../auth/permissions.py` | `Permission` enum + both role→permission matrices |
 | api | `apps/api/.../auth/rbac.py` | `require_org(role, *perms)` / `require_project(role, *perms)` — plain functions taking an already-resolved role, not yet wired to FastAPI `Depends()`; that needs a role to depend *on*, which is Task 9's job |
-| api | `apps/api/.../auth/tenancy.py` | resolves org + project, builds the contexts |
-| api | `apps/api/.../middleware/auth.py` | reads `Authorization`, routes to JWT or API-key path |
+| api | `apps/api/.../auth/tenancy.py` | reads `Authorization`, resolves org + project, builds the contexts — no separate `middleware/auth.py`: once header-parsing and `Identity` resolution were written there was no non-trivial logic left over for it; it would be a one-line `Depends()` wrapper, which belongs with Task 11's route wiring instead |
 | api | `apps/api/.../middleware/rate_limit.py` | aggressive limits on login + key auth |
 | api | `apps/api/.../schemas/{auth,project}.py` | request/response models |
 | api | `apps/api/.../services/project_service.py` | project CRUD, invites, accept, role change, remove |
@@ -106,7 +105,9 @@ class ProjectContext:                # project routes: /v1/projects/{project_id}
     role: Role
 ```
 
-An **API key belongs to exactly one project**, so it carries its own tenant and yields a `ProjectContext` in one lookup — no org or project id in the URL. A **JWT** identifies a global user, so the project comes from the path, and resolution verifies membership *and* that `project.org_id` matches. Both doors, one shape downstream.
+An **API key belongs to exactly one project**, so it carries its own tenant and yields a `ProjectContext` in one lookup — no org or project id in the URL. A **JWT** identifies a global user, so the project comes from the path, and resolution verifies membership *and* that `project.org_id` matches (looked up via the admin session — `projects` is RLS-scoped by `org_id`, so a project-scoped connection can't find its own org_id, the same self-reference pattern as Tasks 4 and 7). Both doors, one shape downstream.
+
+**An API key's role is fixed at `Role.MEMBER`, always — no `role` column on `api_keys`.** The SDK's entire job (enqueue, cancel, replay) is exactly Member's permission set, and an API key is a bearer credential with no login flow or MFA behind it — the credential most likely to leak (committed to a repo, embedded in a client bundle, logged by accident) should carry the least power by default. A leaked key can flood the queue with jobs; it can never pause a queue, revoke another key, or delete the project. Purely additive to extend later (a `role` column with `DEFAULT 'member'`) if a real need for elevated keys ever shows up — nothing built against the fixed role would need to change.
 
 **Scoping enforced below the middleware.** The spec forbids leaving this to discipline, so tenancy is structural twice over — a repository cannot be constructed without a scope, and Postgres RLS double-checks. Built and verified against real Postgres (`packages/db/src/relay_db/unit_of_work.py`) — one class, not two, since a project-scoped unit of work always knows its org too:
 
@@ -191,7 +192,7 @@ F1 builds the org *tier*, not the SaaS *product*. Everything below is deliberate
 6. `auth/jwt.py` — access tokens plus refresh issue/rotate, unit-tested for expiry with an explicit `now` param (no clock monkeypatching); rotation/reuse-detection integration-tested against real Postgres since it touches `refresh_tokens`
 7. `auth/api_keys.py` — issue/revoke (project-scoped UoW), verify (raw admin session — see file table), overlap rotation proved end to end: both keys valid, then old revoked while new keeps working
 8. `auth/permissions.py` + `auth/rbac.py` — both matrices (with monotonicity tests: no higher-ranked role may lack a permission a lower-ranked one has), `require_org`/`require_project` as plain, framework-agnostic checks — matching jwt.py/api_keys.py's pattern of raising rather than assuming HTTP, since the route layer (Task 11) is what turns a denial into a 403
-9. `auth/tenancy.py` + `middleware/auth.py` — both paths → `Identity` → contexts
+9. `auth/tenancy.py` — both paths → `Identity` → contexts; proved live against real Postgres all three of F1's "done when" bars at once: cross-project 404, cross-org 404, and an OrgAdmin with no project membership getting 404 on that project
 10. `services/project_service.py` — org + project invites, accept, role change, escalation guards
 11. Routes `api/v1/auth.py` + `api/v1/projects.py`, wired into `api/router.py`
 12. `middleware/rate_limit.py` — per-IP *and* per-email on login (stops spray and targeted brute force)
