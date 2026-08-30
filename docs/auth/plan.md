@@ -201,9 +201,8 @@ F1 builds the org *tier*, not the SaaS *product*. Everything below is deliberate
 
 ## Done when
 
-`apps/api/tests/integration/auth/test_tenant_isolation.py` proves all three:
-- Authenticated as project A → **404 on every project-B resource**, including nested ones (spec's bar)
-- Authenticated in org X → **404 on every org-Y project**, even as OrgOwner
-- An **OrgAdmin with no project membership gets 404 on that project's jobs** — the org role grants no data access
+Proved across two layers rather than the single file this section originally sketched — the DB-level guarantee and the HTTP-level guarantee are genuinely different claims, so they live where each is actually exercised:
+- `tests/integration/postgres/test_tenant_isolation.py` (raw `asyncpg`, connected as `relay_app`) — org-scoped connection sees only its own project, project-scoped connection sees only its own memberships: **404 on every project-B / org-Y resource** is RLS working, proved below the app layer entirely
+- `apps/api/tests/integration/test_http_e2e.py::test_org_member_with_no_membership_gets_404_listing_projects` — an **OrgAdmin with no project membership gets 404 on that project's jobs**, proved over real HTTP, the layer that actually matters to a caller
 
 Plus: a replayed refresh token revokes its whole family, and a revoked API key stops working within seconds.
