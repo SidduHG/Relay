@@ -8,6 +8,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 
 from fastapi import Depends, Header, Request
+from relay_api.auth.api_keys import InvalidApiKeyError
 from relay_api.auth.permissions import Permission
 from relay_api.auth.rbac import require_org, require_project
 from relay_api.auth.tenancy import (
@@ -20,6 +21,7 @@ from relay_api.auth.tenancy import (
     resolve_project_context,
 )
 from relay_api.config import settings
+from relay_api.middleware.rate_limit import enforce_api_key_failure_rate_limit
 from relay_db.models.user import User
 from relay_db.unit_of_work import TenantUnitOfWork
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,13 +38,21 @@ async def get_app_session(request: Request) -> AsyncIterator[AsyncSession]:
 
 
 async def get_identity(
+    request: Request,
     authorization: str | None = Header(default=None),
     admin_session: AsyncSession = Depends(get_admin_session),
 ) -> Identity:
     token = parse_bearer_token(authorization)
-    return await resolve_identity(
-        token, secret_key=settings.api_secret_key, admin_session=admin_session
-    )
+    try:
+        return await resolve_identity(
+            token, secret_key=settings.api_secret_key, admin_session=admin_session
+        )
+    except InvalidApiKeyError:
+        # Only failures count here — a valid key never reaches this
+        # branch, so legitimate high-frequency SDK traffic is never
+        # throttled. See middleware/rate_limit.py's module docstring.
+        await enforce_api_key_failure_rate_limit(request)
+        raise
 
 
 async def get_current_user(

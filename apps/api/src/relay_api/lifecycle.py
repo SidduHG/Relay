@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from relay_db.bootstrap import ensure_default_organization
 from relay_db.connection import create_engine, create_session_factory
+from relay_redis.connection import create_redis_client
 
 from relay_api.config import settings
 
@@ -40,7 +41,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_engine(settings.database_url)
     app.state.db_sessions = create_session_factory(engine)
 
+    app.state.redis = create_redis_client(settings.redis_url)
+
     yield
 
     await admin_engine.dispose()
     await engine.dispose()
+    await app.state.redis.aclose()

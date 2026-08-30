@@ -22,6 +22,7 @@ from relay_api.auth.jwt import (
 )
 from relay_api.auth.rbac import PermissionDeniedError
 from relay_api.auth.tenancy import MissingCredentialsError, TenantNotFoundError
+from relay_api.middleware.rate_limit import RateLimitExceededError
 from relay_api.services.auth_service import (
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
@@ -77,12 +78,17 @@ _CONFLICT: tuple[type[Exception], ...] = (
     AlreadyAMemberError,
 )
 
+# 429: RELAY-SPEC.md's own general pattern for backpressure (F8 uses it
+# for queue depth too) — reject, and the caller should back off.
+_TOO_MANY_REQUESTS: tuple[type[Exception], ...] = (RateLimitExceededError,)
+
 _STATUS_GROUPS: tuple[tuple[int, tuple[type[Exception], ...]], ...] = (
     (401, _UNAUTHORIZED),
     (403, _FORBIDDEN),
     (404, _NOT_FOUND),
     (400, _BAD_REQUEST),
     (409, _CONFLICT),
+    (429, _TOO_MANY_REQUESTS),
 )
 
 

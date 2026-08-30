@@ -22,6 +22,15 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       # A GitHub Actions service container is a bare image — it does not
       # run infra/postgres/init/ the way local Docker Compose does (that
@@ -30,11 +39,9 @@ jobs:
       # created explicitly as a step below instead.
       DATABASE_ADMIN_URL: postgresql+asyncpg://relay:relay@localhost:5432/relay
       DATABASE_URL: postgresql+asyncpg://relay_app:relay_app@localhost:5432/relay
-      # Both required for apps/api/tests/integration/test_http_e2e.py to
-      # actually run instead of skipping silently — relay_api.main builds
-      # its Settings() singleton at import time and needs both present.
-      # No Redis service container yet: Settings only requires the value
-      # be set, nothing in the app connects to it before F2.
+      # Required for the full app's Settings() singleton, and — since
+      # Task 12 — for a REACHABLE Redis: rate-limit tests now actually
+      # exercise it, not just require the URL be set.
       REDIS_URL: redis://localhost:6379/0
       API_SECRET_KEY: ci-only-secret-key-at-least-32-bytes-long
     steps:

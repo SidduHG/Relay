@@ -13,6 +13,7 @@ members = [
     "relay-db",
     "relay-domain",
     "relay-observability",
+    "relay-redis",
     "relay-security",
     "relay-worker",
 ]
@@ -949,10 +950,10 @@ dependencies = [
     { name = "fastapi" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
-    { name = "redis" },
     { name = "relay-db" },
     { name = "relay-domain" },
     { name = "relay-observability" },
+    { name = "relay-redis" },
     { name = "relay-security" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
@@ -965,10 +966,10 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pyjwt", specifier = ">=2.9" },
-    { name = "redis", specifier = ">=5.0" },
     { name = "relay-db", editable = "packages/db" },
     { name = "relay-domain", editable = "packages/domain" },
     { name = "relay-observability", editable = "packages/observability" },
+    { name = "relay-redis", editable = "packages/redis" },
     { name = "relay-security", editable = "packages/security" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
@@ -1000,6 +1001,17 @@ source = { editable = "packages/domain" }
 name = "relay-observability"
 version = "0.1.0"
 source = { editable = "packages/observability" }
+
+[[package]]
+name = "relay-redis"
+version = "0.1.0"
+source = { editable = "packages/redis" }
+dependencies = [
+    { name = "redis" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "redis", specifier = ">=5.0" }]
 
 [[package]]
 name = "relay-security"

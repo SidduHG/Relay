@@ -8,7 +8,7 @@ defines it is here.
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from relay_api.api.deps import (
     get_app_session,
     get_current_user,
@@ -20,6 +20,7 @@ from relay_api.auth.jwt import rotate
 from relay_api.auth.permissions import Permission
 from relay_api.auth.tenancy import ProjectContext
 from relay_api.config import settings
+from relay_api.middleware.rate_limit import enforce_login_rate_limit
 from relay_api.schemas.auth import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
@@ -50,8 +51,15 @@ async def signup(
 
 @router.post("/login", response_model=TokenPairOut)
 async def login(
-    body: LoginRequest, app_session: AsyncSession = Depends(get_app_session)
+    request: Request,
+    body: LoginRequest,
+    app_session: AsyncSession = Depends(get_app_session),
 ) -> TokenPairOut:
+    # Checked before any DB or bcrypt work — the whole point is to
+    # reject early, not to pay auth_service's timing-normalized cost
+    # (~200ms of bcrypt) on every request from an already-throttled
+    # attacker.
+    await enforce_login_rate_limit(request, body.email)
     async with TenantUnitOfWork(app_session) as uow:
         pair = await login_service(
             uow, body.email, body.password, secret_key=settings.api_secret_key
