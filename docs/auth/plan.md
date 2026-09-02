@@ -1,0 +1,208 @@
+# F1 — Auth, Tenancy & RBAC — Implementation Plan
+
+**Spec:** [RELAY-SPEC.md § F1](../../RELAY-SPEC.md) (lines 59–81) · **Structure:** [folder structure](../../RELAY-production-folder-structure.md)
+**Goal:** Every request resolves to a typed context — `OrgContext` or `ProjectContext` — before any queue logic runs. Two entry paths (JWT for the dashboard, API key for the SDK) collapse into that one shape.
+
+## The three tiers — and the one we are *not* building
+
+```
+Platform (RELAY staff)          ← NOT BUILT. separate auth system entirely. see below.
+└── Organization                ← the customer company. billing + project ownership.
+    └── Project                 ← THE DATA BOUNDARY. every job/queue row carries project_id
+        └── Membership          ← user + role in that project
+```
+
+**Users are global, not org-scoped.** One account, one password, many orgs — the GitHub model, not the Slack model. A contractor working for two customers has one login. `users.email` is globally unique; org belonging lives in `org_memberships`.
+
+**The org tier is built now even though the spec defers hosted multi-org** (line 348: *self-hosted, one org per deployment*). A single-org deployment simply has exactly one `organizations` row, auto-created at bootstrap. This costs ~5% extra work today and removes the one migration you cannot do cheaply later: adding a tier *above* the permission checks means rewriting every one of them.
+
+**Platform/staff admin is deliberately excluded**, and must never be a boolean on `users`. When it lands in v2 it gets: its own `staff_users` table and login route, mandatory MFA, **no implicit customer data read**, and impersonation that is time-boxed, reason-required, and written to an audit the *customer* can see. A `is_superuser` flag is how one leaked password becomes every customer's breach. The seam that keeps this cheap: `audit_log.actor_type` already accepts `'staff'`.
+
+## Two role scopes — org governs the org, project governs the data
+
+**The rule that makes this safe: an org role grants zero data access.** An OrgAdmin can create a project and can add themselves to it, but that self-grant is an audited event. There is no path to reading a job payload that doesn't go through a project membership row.
+
+| Org-level action | OrgOwner | OrgAdmin | OrgMember |
+|---|:--:|:--:|:--:|
+| Billing, delete org, transfer org ownership | ✓ | — | — |
+| Create / delete projects | ✓ | ✓ | — |
+| Invite / remove org members | ✓ | ✓ | — |
+| Self-grant project membership (audited) | ✓ | ✓ | — |
+
+| Project-level action | Owner | Admin | Member | Viewer |
+|---|:--:|:--:|:--:|:--:|
+| Read jobs, queues, workers, DLQ | ✓ | ✓ | ✓ | ✓ |
+| Enqueue, cancel, replay a job | ✓ | ✓ | ✓ | — |
+| Pause/purge queue, edit queue defaults | ✓ | ✓ | — | — |
+| Create / revoke API keys | ✓ | ✓ | — | — |
+| Invite members, change project roles | ✓ | ✓ | — | — |
+| Delete project, transfer project ownership | ✓ | — | — | — |
+
+**Escalation guards** (both scopes): cannot grant a role above your own; cannot change your own role; the last OrgOwner and the last project Owner cannot be demoted or removed; project invitees must already be org members.
+
+## Data model — migrations `0001_initial_schema`, `0002_projects_tenancy`
+
+| Table | Key columns |
+|---|---|
+| `organizations` | id, name, slug (unique), created_at |
+| `users` | id, email (unique, citext), password_hash — **global, no org_id** |
+| `org_memberships` | user_id, org_id, org_role — unique on (user_id, org_id) |
+| `projects` | id, **org_id**, name, slug — unique on (org_id, slug) |
+| `memberships` | user_id, project_id, role — unique on (user_id, project_id) |
+| `api_keys` | id, project_id, prefix (clear), key_hash, name, last_used_at, revoked_at |
+| `refresh_tokens` | id, user_id, family_id, token_hash, used_at, expires_at, revoked_at |
+| `invitations` | id, org_id, **project_id (nullable)**, email, role, token_hash, expires_at, accepted_at |
+| `audit_log` | id, org_id, project_id (nullable), actor_type, actor_id, action, target, metadata, ip, created_at |
+
+`invitations.project_id IS NULL` means an org invite; set means a project invite. `audit_log` lands here rather than the structure's `0008` slot — F1 needs it immediately (P5: no state change without a row write). Its append-only guarantee is enforced by Postgres, not by `AuditRepo` happening to be write-only: migration `0002_audit_log_append_only.py` revokes `UPDATE`/`DELETE` on `audit_log` from `relay_app` specifically (every other table keeps the default full DML grant from `01-app-role.sql`). Proved live and in `tests/integration/postgres/test_audit_log_append_only.py`: connected as `relay_app`, `INSERT`/`SELECT` succeed, `UPDATE`/`DELETE` both raise `InsufficientPrivilegeError`.
+
+## Files by layer
+
+| Layer | File | Responsibility |
+|---|---|---|
+| domain | `packages/domain/.../entities/{user,organization,project,membership}.py` | pure dataclasses, no I/O |
+| domain | `packages/domain/.../enums/role.py` | `OrgRole`, `Role`, and their `RANK` orderings |
+| security | `packages/security/.../hashing.py` | bcrypt passwords; sha256 for keys and tokens |
+| security | `packages/security/.../secrets.py` | `rly_live_` + 24 chars; urlsafe invite/refresh tokens |
+| security | `packages/security/.../validation.py` | email normalization, password strength floor |
+| db | `packages/db/.../models/*.py` | the nine tables above |
+| db | `packages/db/.../repositories/*.py` | one per table; **all take a scoped UoW** |
+| db | `packages/db/.../unit_of_work.py` | `OrgUnitOfWork` / `TenantUnitOfWork` — the scoping chokepoints |
+| api | `apps/api/.../auth/jwt.py` | 15-min access token, rotating refresh with reuse detection — no separate `auth/password.py`: `packages/security/hashing.py` already has `hash_password`/`verify_password`, and a wrapper adding no logic would be pure indirection; services import it directly |
+| api | `apps/api/.../auth/api_keys.py` | issue/revoke through the normal project-scoped UoW; `verify` takes a raw admin session instead — `api_keys` is RLS-scoped by `project_id`, so a project-scoped connection structurally cannot find a key before knowing which project it belongs to (same self-reference problem as `organizations` in Task 4, proved live again here) |
+| api | `apps/api/.../auth/permissions.py` | `Permission` enum + both role→permission matrices |
+| api | `apps/api/.../auth/rbac.py` | `require_org(role, *perms)` / `require_project(role, *perms)` — plain functions taking an already-resolved role, not yet wired to FastAPI `Depends()`; that needs a role to depend *on*, which is Task 9's job |
+| api | `apps/api/.../auth/tenancy.py` | reads `Authorization`, resolves org + project, builds the contexts — no separate `middleware/auth.py`: once header-parsing and `Identity` resolution were written there was no non-trivial logic left over for it; it would be a one-line `Depends()` wrapper, which belongs with Task 11's route wiring instead |
+| api | `apps/api/.../middleware/rate_limit.py` | aggressive limits on login + key auth — the FastAPI-specific wiring only; the actual counter is `packages/redis/.../rate_limit/limiter.py` (a Lua script, not `INCR` + a separate `EXPIRE`: proved the two-step version has a real race — concurrent requests can both read the pre-increment count, and a crash between the two calls leaves a counter with no TTL that never resets). Login limits *every* attempt (success included) on two independent keys, per-IP and per-email; API-key verification limits only *failures*, per-IP — legitimate SDK traffic is expected to be frequent and always valid, so limiting every attempt would throttle real usage |
+| api | `apps/api/.../schemas/{auth,project}.py` | request/response models |
+| api | `apps/api/.../services/auth_service.py` | signup, login — not in the original file list; didn't fit jwt.py (token mechanics, not accounts) or project_service.py (org/project membership, not accounts). login() compares against a fixed dummy bcrypt hash when no user is found, verified directly: a naive version returns in ~0.002ms for an unknown email vs ~210ms for a known one with the wrong password, a trivial timing side-channel for enumerating registered emails even behind an identical error message |
+| api | `apps/api/.../services/project_service.py` | project CRUD, invites, accept, self-grant, role change, remove — every mutating function also writes an `audit_log` entry, pulled forward from Task 13 specifically because the plan states the org self-grant "is an audited event" as a safety property of that capability, not an add-on; `packages/db/repositories/audit.py` is write-only, just enough for this |
+| api | `apps/api/.../api/v1/auth.py` | signup, login, refresh, logout, plus API key CRUD — grouped in this file per the plan, but the routes live under `/v1/projects/{project_id}/api-keys`: a key is a project sub-resource, so the URL says so even though the file grouping doesn't |
+| api | `apps/api/.../api/v1/projects.py` | orgs, projects, members, invitations. Deliberately no "create organization" route — self-hosted, one org per deployment, bootstrap.py already creates the sole one. No implicit membership on project creation either: creating a project does not grant the creator access — self-grant (audited) is still required, even for the creator, which is the "org role grants zero data access" rule holding even here. Confirmed live: a fresh e2e test skipped the self-grant step and correctly got 404 inviting to a project the "owner" had no membership in — not a bug, the design working as intended |
+| api | `apps/api/.../api/deps.py` | `get_identity`, `get_org_context`, `get_project_context`, plus `require_org_permission`/`require_project_permission` wrapping Task 8's rbac.py checks into real `Depends()` factories — this is where Tasks 8 and 9's deferred FastAPI wiring finally lands. Routes only use these wrappers when calling a repo directly (`create_project`, the API-key routes); routes calling a `project_service.py` function use the plain context instead, since those functions already enforce the same permission internally (Task 10) — wrapping both would just recheck it twice |
+
+## Key mechanisms
+
+**Three types, resolved in order.** Identity says *who*; the contexts say *where*:
+
+```python
+@dataclass(frozen=True)
+class Identity:                      # middleware/auth.py produces this
+    kind: Literal["user", "api_key"]
+    user_id: UUID | None
+    api_key_id: UUID | None
+
+@dataclass(frozen=True)
+class OrgContext:                    # org routes: /v1/orgs/{org_id}/...
+    identity: Identity
+    org_id: UUID
+    org_role: OrgRole
+
+@dataclass(frozen=True)
+class ProjectContext:                # project routes: /v1/projects/{project_id}/...
+    identity: Identity
+    org_id: UUID                     # from project.org_id — never from the client
+    project_id: UUID
+    role: Role
+```
+
+An **API key belongs to exactly one project**, so it carries its own tenant and yields a `ProjectContext` in one lookup — no org or project id in the URL. A **JWT** identifies a global user, so the project comes from the path, and resolution verifies membership *and* that `project.org_id` matches (looked up via the admin session — `projects` is RLS-scoped by `org_id`, so a project-scoped connection can't find its own org_id, the same self-reference pattern as Tasks 4 and 7). Both doors, one shape downstream.
+
+**An API key's role is fixed at `Role.MEMBER`, always — no `role` column on `api_keys`.** The SDK's entire job (enqueue, cancel, replay) is exactly Member's permission set, and an API key is a bearer credential with no login flow or MFA behind it — the credential most likely to leak (committed to a repo, embedded in a client bundle, logged by accident) should carry the least power by default. A leaked key can flood the queue with jobs; it can never pause a queue, revoke another key, or delete the project. Purely additive to extend later (a `role` column with `DEFAULT 'member'`) if a real need for elevated keys ever shows up — nothing built against the fixed role would need to change.
+
+**Scoping enforced below the middleware.** The spec forbids leaving this to discipline, so tenancy is structural twice over — a repository cannot be constructed without a scope, and Postgres RLS double-checks. Built and verified against real Postgres (`packages/db/src/relay_db/unit_of_work.py`) — one class, not two, since a project-scoped unit of work always knows its org too:
+
+```python
+class TenantUnitOfWork:
+    def __init__(self, session: AsyncSession, *, org_id: UUID, project_id: UUID | None = None):
+        self.session, self.org_id, self.project_id = session, org_id, project_id
+        self.projects = ProjectRepo(self)   # repos read scope off the UoW —
+        self.memberships = MembershipRepo(self)  # there is no unscoped constructor
+
+    async def __aenter__(self) -> "TenantUnitOfWork":
+        # SET LOCAL rejects bind parameters outright — verified directly:
+        # asyncpg sends "$1", Postgres errors, because SET is a utility
+        # statement that never goes through parameter binding. Safe to
+        # interpolate here specifically because both values are uuid.UUID,
+        # never raw user input.
+        await self.session.execute(text(f"SET LOCAL app.org_id = '{self.org_id}'"))
+        if self.project_id is not None:
+            await self.session.execute(text(f"SET LOCAL app.project_id = '{self.project_id}'"))
+        return self
+```
+
+RLS applies at whichever tier owns the row — `projects`, `org_memberships`, `invitations`, `audit_log` use `USING (org_id = NULLIF(current_setting('app.org_id', true), '')::uuid)`; `memberships` and `api_keys` use `project_id`. The `NULLIF` matters: once a custom GUC is touched anywhere in a session, letting that transaction end reverts it to `''`, not `NULL` — verified directly, and without the `NULLIF` a connection that forgets to scope raises a cast error instead of failing closed. `organizations`' own policy is self-referential (`id = ...`), which has a real consequence: the RLS-restricted role can never discover "does any org exist?" without already knowing its id — bootstrap uses a separate admin connection for exactly this reason (`packages/db/src/relay_db/bootstrap.py`). Control loops connect as a bypass role.
+
+**Refresh rotation with reuse detection:**
+
+```python
+async def rotate(uow, presented: str) -> TokenPair:
+    row = await uow.refresh_tokens.get_by_hash(sha256(presented))
+    if row is None or row.expires_at < now():
+        raise HTTPException(401)
+    if row.used_at is not None:                      # a spent token replayed
+        await uow.refresh_tokens.revoke_family(row.family_id)   # stolen-token signal
+        raise HTTPException(401, "token reuse detected")
+    await uow.refresh_tokens.mark_used(row.id)
+    return await issue_pair(row.user_id, family_id=row.family_id)
+```
+
+**Two-level invitations** — single-use, hashed at rest, 7-day expiry, bound to the invited email. An org invite creates the user + `org_membership`; a project invite requires the invitee to already be an org member:
+
+```python
+async def invite(uow, actor, email: str, role, project_id: UUID | None) -> str:
+    if RANK[role] > RANK[actor.role]:
+        raise HTTPException(403, "cannot grant a role above your own")
+    if project_id and not await uow.org_memberships.exists(email):
+        raise HTTPException(409, "invite to the organization first")
+    token = secrets.token_urlsafe(32)
+    await uow.invitations.upsert_pending(       # re-inviting replaces, never duplicates
+        email=email, role=role, project_id=project_id,
+        token_hash=sha256(token), expires_at=now() + timedelta(days=7))
+    await uow.audit.write(actor, "member.invited", target=email, meta={"role": role})
+    return token              # goes out in the email link; never stored in clear
+```
+
+**404 vs 403 — the distinction matters.** Another org's or another project's resource is **404** (a 403 confirms it exists). Inside a project you belong to, insufficient role is **403** (you already know it exists).
+
+**Instant revocation.** A Redis denylist keyed by `api_key_id` / refresh `family_id`, written on revoke and checked on every auth. Positive auth lookups cache ~10s — short enough that a leaked key dies in seconds.
+
+**API key rotation with overlap.** Create new → both valid → revoke old. `last_used_at` proves the old key is dead before you kill it.
+
+## Scope boundary — build the seam, then stop
+
+F1 builds the org *tier*, not the SaaS *product*. Everything below is deliberately deferred, and each is cheap to add later precisely because the tier exists:
+
+| Deferred | Why it's safe to wait | The seam that's already here |
+|---|---|---|
+| Platform / staff admin | separate auth system; zero customers today | `audit_log.actor_type` accepts `'staff'` |
+| Billing, quotas, metering | spec line 348 defers it | `organizations` is the natural anchor |
+| SSO / SAML / social login | one enterprise deal away, not now | `users` has no password-only assumption |
+| Transactional email for invites | F1 returns the invite token; delivery is a separate concern | `invitations.token_hash` |
+| Password reset | same token machinery as invitations | reuse `upsert_pending` + expiry |
+
+**Then go build F2 and F3.** Per the spec's own ordering note: *"A dashboard over an engine that loses jobs under `kill -9` is a frontend project."* Auth is the gate everything hangs off, not the thing worth polishing. Once the three isolation tests below pass, F1 is done — resist adding role #5.
+
+## Task order
+
+1. `OrgRole` + `Role` enums and domain entities — pure, unit-testable with zero containers
+2. `packages/security`: password hashing, key/token generation, validation
+3. Models + migrations `0001`, `0002`, including both tiers of RLS policy
+4. Bootstrap: a fresh deployment auto-creates one `organizations` row (single-org mode)
+5. `OrgUnitOfWork` / `TenantUnitOfWork` + repositories — **write the isolation tests here, before any routes**
+6. `auth/jwt.py` — access tokens plus refresh issue/rotate, unit-tested for expiry with an explicit `now` param (no clock monkeypatching); rotation/reuse-detection integration-tested against real Postgres since it touches `refresh_tokens`
+7. `auth/api_keys.py` — issue/revoke (project-scoped UoW), verify (raw admin session — see file table), overlap rotation proved end to end: both keys valid, then old revoked while new keeps working
+8. `auth/permissions.py` + `auth/rbac.py` — both matrices (with monotonicity tests: no higher-ranked role may lack a permission a lower-ranked one has), `require_org`/`require_project` as plain, framework-agnostic checks — matching jwt.py/api_keys.py's pattern of raising rather than assuming HTTP, since the route layer (Task 11) is what turns a denial into a 403
+9. `auth/tenancy.py` — both paths → `Identity` → contexts; proved live against real Postgres all three of F1's "done when" bars at once: cross-project 404, cross-org 404, and an OrgAdmin with no project membership getting 404 on that project
+10. `services/auth_service.py` (signup, login) + `services/project_service.py` — org + project invites, accept, self-grant, role change, remove, every escalation guard proved live including the last-owner guard (needs a two-owner sequence to exercise honestly: an owner can never act on their own role). `packages/db/unit_of_work.py`'s `org_id` became optional alongside `project_id` — signup/login touch only global tables (`users`, `refresh_tokens`) and have no org to scope by yet
+11. `api/deps.py` (the real `Depends()` wiring), `middleware/error_handler.py` (one status-code mapping for every plain exception raised across the whole branch — jwt.py, api_keys.py, rbac.py, tenancy.py, both services — registered once instead of a try/except repeated in every route), routes `api/v1/auth.py` + `api/v1/projects.py`, wired into `api/router.py`. `lifecycle.py`'s admin engine now stays alive for the app's whole lifetime instead of being disposed after bootstrap — Task 11's routes need it on every authenticated request (`verify_api_key`, the JWT path's project lookup, invitation-token lookup), not just at startup. First real end-to-end proof: signup → login → self-grant (audited) → org invite → accept → project invite → accept → a mere Member blocked from a role change (403) → the owner blocked from removing themselves (403) — the entire F1 spec, over real HTTP, against real Postgres
+12. `middleware/rate_limit.py` — per-IP *and* per-email on login (stops spray and targeted brute force); the primitive underneath (`packages/redis`, previously an empty placeholder package) is an atomic Lua script (`INCR` + `EXPIRE` in one round trip), not two separate calls — proved live that the naive two-step version loses a real race (30 concurrent requests against limit=10 allowed more than 10 with `INCR`-then-`EXPIRE`; the Lua version allowed exactly 10, every time) and that a crash between the two steps would leave a counter stuck with no TTL, never resetting. Login and API-key auth are deliberately shaped differently: login rate-limits *every* attempt (success included) on two independent keys — per-IP and per-email, since a per-IP-only limit never trips for a distributed/botnet attack — while API-key verification rate-limits only *failures*, per-IP, since legitimate SDK traffic authenticates on every request and limiting all of it would throttle real usage. Proved end to end over real HTTP against real Redis: repeated login attempts trip 429 and stay tripped for the window, 40 consecutive valid-JWT requests are never rate-limited, and API-key failures trip at the configured boundary while valid-shaped-but-wrong keys under that boundary still return 401. Mid-task, `RELAY-production-folder-structure.md` surfaced that `packages/redis` was meant to hold `rate_limit/limiter.py` (this task) alongside a future `rate_limit/bucket.py` (F8's token bucket) plus a `keys.py` for centralized Redis key naming, not a flat `rate_limit.py` file — restructured accordingly and re-verified mypy/ruff/live behavior after the move
+13. Audit writes on every privileged action, including OrgAdmin self-grants (already done — pulled forward into Task 10, see line 79); what was actually left here was "verify append-only," and verifying it honestly meant not trusting that `AuditRepo` merely lacks an `update`/`delete` method. Added `migrations/0002_audit_log_append_only.py`, revoking `UPDATE`/`DELETE` on `audit_log` from `relay_app` (every other table keeps the default grant). Proved live via `psql` as `relay_app` (both statements: `permission denied for table audit_log`) and via a real-Postgres integration test asserting `asyncpg.exceptions.InsufficientPrivilegeError` on both paths
+
+## Done when
+
+Proved across two layers rather than the single file this section originally sketched — the DB-level guarantee and the HTTP-level guarantee are genuinely different claims, so they live where each is actually exercised:
+- `tests/integration/postgres/test_tenant_isolation.py` (raw `asyncpg`, connected as `relay_app`) — org-scoped connection sees only its own project, project-scoped connection sees only its own memberships: **404 on every project-B / org-Y resource** is RLS working, proved below the app layer entirely
+- `apps/api/tests/integration/test_http_e2e.py::test_org_member_with_no_membership_gets_404_listing_projects` — an **OrgAdmin with no project membership gets 404 on that project's jobs**, proved over real HTTP, the layer that actually matters to a caller
+
+Plus: a replayed refresh token revokes its whole family, and a revoked API key stops working within seconds.

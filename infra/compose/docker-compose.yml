@@ -9,9 +9,19 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-relay}
       POSTGRES_DB: ${POSTGRES_DB:-relay}
     ports:
-      - "5432:5432"
+      # Host 5433 -> container 5432. A native Postgres install on this
+      # machine already owns host port 5432; mapping to the same number
+      # would make host-side tools (this compose stack's own API/worker
+      # containers are unaffected, they talk to "postgres:5432" over the
+      # Docker network) silently connect to the wrong server instead of
+      # this container. Migrations run from the host use localhost:5433.
+      - "5433:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
+      # Official Postgres images auto-run every script here, in filename
+      # order, but ONLY on a completely fresh data directory — an
+      # existing pg_data volume silently skips this on every later start.
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-relay}"]
       interval: 5s

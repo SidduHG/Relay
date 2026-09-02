@@ -18,7 +18,7 @@ flowchart TB
     end
 
     subgraph STORE["Storage"]
-        PG[("PostgreSQL<br/>SOURCE OF TRUTH<br/>jobs, attempts, deps,<br/>schedules, audit")]
+        PG[("PostgreSQL<br/>SOURCE OF TRUTH<br/>orgs, projects, members,<br/>jobs, attempts, deps,<br/>schedules, audit")]
         RD[("Redis 7<br/>HOT INDEX<br/>streams, delay zsets,<br/>rate buckets, workers")]
         BLOB[("Blob store<br/>payloads over 256KB")]
     end
@@ -66,7 +66,7 @@ flowchart TB
 | Layer | Owns | Never does |
 |---|---|---|
 | **Control plane** | Auth, tenancy, validation, enqueue, reads, WebSocket fan-out | Execute jobs, run control loops |
-| **Postgres** | Job state, attempt history, DAG edges, schedules, audit | Serve the dispatch hot path |
+| **Postgres** | Tenancy, job state, attempt history, DAG edges, schedules, audit | Serve the dispatch hot path |
 | **Redis** | Dispatch transport, delay sets, rate buckets, worker registry | Hold anything that can't be rebuilt |
 | **Control loops** | Promotion, reclaim, cron firing, drift repair, retention | Run on more than one process at a time |
 | **Workers** | Claim, lease renewal, execute, report outcome | Decide policy — they read it from the job |

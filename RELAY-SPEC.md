@@ -62,23 +62,26 @@ Everything hangs off tenant scoping, so this lands before any queue logic.
 
 **Steps**
 
-1. **Users and projects.** Email plus password, bcrypt hashed. A user belongs to many projects through a membership row that carries a role.
-2. **Roles.** Owner handles billing and deletion. Admin manages keys and queues. Member enqueues and replays. Viewer reads only.
+1. **Organizations, users and projects.** Email plus password, bcrypt hashed. Users are global — one account, many orgs — so a contractor working for two customers has one login. A user joins an organization through an `org_membership` row and a project through a `membership` row; each carries its own role.
+2. **Two role scopes.** Org roles govern the organization: OrgOwner handles billing and deletion, OrgAdmin creates projects and invites people, OrgMember simply belongs. Project roles govern the data: Owner deletes the project, Admin manages keys and queues, Member enqueues and replays, Viewer reads only.
 3. **JWT path for the dashboard.** 15-minute access token, rotating refresh token.
 4. **API key path for the SDK.** Format `rly_live_` plus 24 random characters. Stored as a hash. The visible prefix is kept in clear so the UI can show which key is which.
-5. **Project scoping in the data layer.** Every queue and job table carries `project_id`, and middleware injects it into every query.
+5. **Project scoping in the data layer.** Every queue and job table carries `project_id`, and middleware injects it into every query. `projects.org_id` is the only place the org tier touches the hot path — job tables never carry an `org_id`.
+6. **Invitations.** Single-use tokens, hashed at rest, seven-day expiry, bound to the invited email. An org invite creates the account; a project invite requires the invitee to already be an org member.
 
 **Must handle**
 
-- **Scoping enforced below the middleware.** Either Postgres row-level security with a per-request project setting, or a repository base class where a query is impossible to build without a project id. A single forgotten filter is a cross-tenant leak — do not leave it to discipline.
+- **An org role grants zero data access.** An OrgAdmin can create a project and add themselves to it, but that self-grant is an audited event. There is no path to a job payload that does not go through a project membership row. Skip this and you cannot answer "who read this?" during an incident.
+- **Scoping enforced below the middleware.** Postgres row-level security with a per-request setting *and* a repository base class where a query is impossible to build without a scope. Two independent layers, one of them enforced by the database itself. A single forgotten filter is a cross-tenant leak — do not leave it to discipline.
 - **Refresh token reuse detection.** If an already-rotated refresh token is presented, revoke the entire token family and force re-login. That's a stolen-token signal.
 - **Key rotation with overlap.** Create the new key, run both, then revoke the old. Every key tracks `last_used_at` so you can prove a key is dead before killing it.
 - **Instant revocation.** Auth checks a short-TTL revocation cache, not an hour-long one. A leaked key must die in seconds.
 - **Audit log.** Append-only record of every privileged action: key created or revoked, job replayed, queue paused or purged, member role changed.
-- **Return 404, not 403,** for another project's resources. A 403 confirms the resource exists.
+- **Return 404, not 403,** for another organization's or another project's resources. A 403 confirms the resource exists. Inside a project you do belong to, insufficient role is a 403 — you already know it is there.
+- **Escalation guards.** Nobody grants a role above their own or edits their own role. The last OrgOwner and the last project Owner cannot be demoted or removed, or you get an orphaned tenant nobody can administer.
 - Login and key-auth endpoints get their own aggressive rate limit.
 
-**Done when:** a test authenticates as project A and gets 404 on every single project-B resource, including nested ones.
+**Done when:** a test authenticates as project A and gets 404 on every single project-B resource, including nested ones; the same holds across organizations, even for an OrgOwner; and an OrgAdmin with no project membership gets 404 on that project's jobs.
 
 ---
 
@@ -345,13 +348,16 @@ State this in the README. Knowing what you left out reads as judgement, not as g
 - Multi-region and cross-datacenter replication — single region only
 - Redis Cluster sharding — one Redis with append-only persistence and a replica; sharding is a v2 problem with a documented plan
 - Non-Python workers — the wire protocol is documented so a Go or Node worker is possible, but not shipping one
-- Billing, quotas and hosted multi-org — self-hosted, one org per deployment
+- Billing, quotas and usage metering — the `organizations` tier they anchor to ships in F1, but nothing meters or charges in v1
+- Platform staff administration — no cross-org operator role. When it lands it gets its own credentials, mandatory MFA, and time-boxed impersonation logged to an audit the customer can read. Never an `is_superuser` flag on `users`
+- SSO, SAML and social login — email plus password only
 
 **Impossible, and said so**
 - Exactly-once delivery. At-least-once with idempotent handlers, by design.
 
 **Deferred but seamed for**
 - AI and agentic job types. The seams that keep this cheap to add later already exist in this spec: the handler abstraction, per-job timeouts with lease renewal for long-running work, result passing between DAG nodes, and streaming output over the existing WebSocket. Nothing here needs rewriting to support it.
+- Hosted multi-org operation. The `organizations` tier ships in F1 even though v1 deploys self-hosted with a single org created at bootstrap. Billing, quotas, SSO and staff administration all anchor to it. Adding a tier *above* the permission checks later would mean rewriting every one of them; adding features beneath a tier that already exists is additive.
 
 ---
 
