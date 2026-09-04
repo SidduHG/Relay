@@ -5,7 +5,7 @@ description = "RELAY — self-hosted distributed job queue"
 requires-python = ">=3.12"
 
 [tool.uv.workspace]
-members = ["apps/api", "apps/worker", "packages/db", "packages/domain", "packages/observability", "packages/redis", "packages/security"]
+members = ["apps/api", "apps/worker", "packages/db", "packages/domain", "packages/observability", "packages/redis", "packages/security", "packages/storage"]
 
 [dependency-groups]
 dev = [
@@ -50,6 +50,7 @@ mypy_path = [
     "packages/observability/src",
     "packages/redis/src",
     "packages/security/src",
+    "packages/storage/src",
 ]
 
 [[tool.mypy.overrides]]
