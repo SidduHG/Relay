@@ -5,7 +5,7 @@
 - `RELAY-SPEC.md`, especially the ground rules, performance targets, and F9 observability dashboard requirements.
 - `ARCHITECTURE.md`, especially the dashboard boundary: UI reads and operator actions go through the control plane and never access Postgres or Redis directly.
 - `RELAY-production-folder-structure.md`, especially the React frontend layout under `apps/frontend/src`.
-- `docs/design/RELAY Dashboard.dc.html` as the visual and content reference.
+- `design/RELAY Dashboard.dc.html` as the current visual and content reference.
 - The existing Vite/React entry points, TypeScript configuration, ESLint setup, and empty `pages/Home` production folder.
 
 ## Architecture and placement
@@ -13,6 +13,8 @@
 The landing page belongs in `apps/frontend/src/pages/Home/`, which already exists in the repository and was explicitly requested. The production folder guide enumerates operator pages but does not name a public Home page; using the existing responsibility-based page folder is the smallest consistent extension. Shared global tokens and reset styles belong in `apps/frontend/src/styles/`.
 
 The page uses static presentation data only. It will not talk directly to Redis, Postgres, or backend endpoints. Later console views can replace visual sample data through control-plane API and WebSocket integrations.
+
+Tailwind CSS v4 is integrated through its official Vite plugin. Layout, spacing, typography, responsive states, and ordinary interaction styles use utilities directly in React markup. Page CSS is reserved for the custom dashboard illustrations, pseudo-elements, and keyframe behavior that would become less readable as long arbitrary-value utility strings.
 
 ## Task 1 — Home foundation and hero
 
@@ -58,7 +60,12 @@ Explain how Relay handles failures, traces work across the queue boundary, and s
 
 ### Scope
 
-Add focused sections below the hero within the Home page and extend its page-local styles.
+- Add the four operator-question cards below the hero.
+- Add six focused feature stories with code-rendered interface concepts.
+- Create `HomeProofSections.tsx` and `HomeProofSections.css` beside the Home page so the large visual section remains page-local and reviewable.
+- Update Home navigation anchors to target the completed sections.
+- Add the Tailwind Vite integration and explicit theme configuration requested during implementation.
+- Migrate ordinary Home structure and component presentation to inline Tailwind utilities while retaining bespoke visualization CSS.
 
 ### Approach
 
