@@ -25,7 +25,7 @@ A visitor lands on the page, understands the product promise, sees a credible pr
 - A high-impact hero focused on Relay's durability promise.
 - A visual operations preview that reflects Relay concepts such as queues, workers, throughput, and job state.
 - Accessible interaction and readable layouts across desktop and mobile screens.
-- Styling built with the existing React and CSS toolchain.
+- A consistent responsive styling foundation without a third-party component library.
 
 ## Out of scope
 
@@ -33,7 +33,7 @@ A visitor lands on the page, understands the product promise, sees a credible pr
 - Live API or WebSocket data.
 - Operator dashboard pages such as Jobs, Queues, Workers, or DLQ.
 - Backend changes.
-- A new UI framework or design-system dependency.
+- A third-party component library or runtime UI framework.
 
 ## How users know it works
 
