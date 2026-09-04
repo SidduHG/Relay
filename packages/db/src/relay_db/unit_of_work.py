@@ -35,10 +35,15 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from relay_db.repositories.api_keys import ApiKeyRepo
+from relay_db.repositories.attempts import AttemptRepo
 from relay_db.repositories.audit import AuditRepo
+from relay_db.repositories.handler_schemas import HandlerSchemaRepo
+from relay_db.repositories.idempotency import IdempotencyRepo
 from relay_db.repositories.invitations import InvitationRepo
+from relay_db.repositories.jobs import JobRepo
 from relay_db.repositories.memberships import MembershipRepo, OrgMembershipRepo
 from relay_db.repositories.projects import ProjectRepo
+from relay_db.repositories.queues import QueueRepo
 from relay_db.repositories.refresh_tokens import RefreshTokenRepo
 from relay_db.repositories.users import UserRepo
 
@@ -63,6 +68,11 @@ class TenantUnitOfWork:
         self.api_keys = ApiKeyRepo(self)
         self.invitations = InvitationRepo(self)
         self.audit = AuditRepo(self)
+        self.queues = QueueRepo(self)
+        self.jobs = JobRepo(self)
+        self.attempts = AttemptRepo(self)
+        self.idempotency = IdempotencyRepo(self)
+        self.handler_schemas = HandlerSchemaRepo(self)
 
     async def __aenter__(self) -> "TenantUnitOfWork":
         # SET LOCAL rejects bind parameters outright — verified directly
