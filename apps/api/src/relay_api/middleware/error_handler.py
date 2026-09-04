@@ -13,6 +13,10 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from relay_db.queries.job_queries import InvalidCursorError
+from relay_domain.state_machine import IllegalTransitionError, StaleTransitionError
+from relay_domain.value_objects.queue_name import InvalidQueueNameError
+from relay_storage import PayloadTooLargeError, StorageUnavailableError
 
 from relay_api.auth.api_keys import InvalidApiKeyError
 from relay_api.auth.jwt import (
@@ -28,6 +32,15 @@ from relay_api.services.auth_service import (
     InvalidCredentialsError,
     InvalidEmailError,
     WeakPasswordError,
+)
+from relay_api.services.job_errors import (
+    DatabaseUnavailableError,
+    InvalidQueueDefaultsError,
+    JobNotFoundError,
+    PurgeTokenInvalidError,
+    QueueIndexUnavailableError,
+    QueueNotFoundError,
+    SchemaValidationError,
 )
 from relay_api.services.project_service import (
     AlreadyAMemberError,
@@ -59,7 +72,12 @@ _FORBIDDEN: tuple[type[Exception], ...] = (
 # 404: RELAY-SPEC.md F1 — another tenant's resource, or a membership
 # that does not exist, must look identical to "this does not exist."
 # A 403 here would itself leak that the resource exists.
-_NOT_FOUND: tuple[type[Exception], ...] = (TenantNotFoundError, NotAMemberError)
+_NOT_FOUND: tuple[type[Exception], ...] = (
+    TenantNotFoundError,
+    NotAMemberError,
+    JobNotFoundError,
+    QueueNotFoundError,
+)
 
 # 400: the request is well-formed but violates a business rule that
 # does not depend on any existing row's state.
@@ -68,6 +86,11 @@ _BAD_REQUEST: tuple[type[Exception], ...] = (
     WeakPasswordError,
     NotAnOrgMemberError,
     InvitationInvalidError,
+    InvalidQueueNameError,
+    SchemaValidationError,
+    InvalidCursorError,
+    InvalidQueueDefaultsError,
+    PurgeTokenInvalidError,
 )
 
 # 409: the request is valid but conflicts with the current state of a
@@ -76,11 +99,21 @@ _CONFLICT: tuple[type[Exception], ...] = (
     EmailAlreadyRegisteredError,
     LastOwnerError,
     AlreadyAMemberError,
+    IllegalTransitionError,
+    StaleTransitionError,
 )
 
 # 429: RELAY-SPEC.md's own general pattern for backpressure (F8 uses it
 # for queue depth too) — reject, and the caller should back off.
 _TOO_MANY_REQUESTS: tuple[type[Exception], ...] = (RateLimitExceededError,)
+
+_PAYLOAD_TOO_LARGE: tuple[type[Exception], ...] = (PayloadTooLargeError,)
+
+_UNAVAILABLE: tuple[type[Exception], ...] = (
+    StorageUnavailableError,
+    DatabaseUnavailableError,
+    QueueIndexUnavailableError,
+)
 
 _STATUS_GROUPS: tuple[tuple[int, tuple[type[Exception], ...]], ...] = (
     (401, _UNAUTHORIZED),
@@ -89,6 +122,8 @@ _STATUS_GROUPS: tuple[tuple[int, tuple[type[Exception], ...]], ...] = (
     (400, _BAD_REQUEST),
     (409, _CONFLICT),
     (429, _TOO_MANY_REQUESTS),
+    (413, _PAYLOAD_TOO_LARGE),
+    (503, _UNAVAILABLE),
 )
 
 

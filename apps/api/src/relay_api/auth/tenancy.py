@@ -79,9 +79,7 @@ def parse_bearer_token(header_value: str | None) -> str:
     return token
 
 
-async def resolve_identity(
-    token: str, *, secret_key: str, admin_session: AsyncSession
-) -> Identity:
+async def resolve_identity(token: str, *, secret_key: str, admin_session: AsyncSession) -> Identity:
     """Branches on the token's shape. Lets InvalidAccessTokenError and
     InvalidApiKeyError (jwt.py, api_keys.py) propagate as-is — the route
     layer maps either to 401, same as MissingCredentialsError above."""
@@ -116,8 +114,9 @@ async def resolve_project_context(
     admin_session: AsyncSession,
     app_session: AsyncSession,
 ) -> ProjectContext:
-    """project_id is the URL path parameter for a user identity, and
-    ignored (the key's own project wins) for an api_key identity.
+    """project_id is the URL path parameter for either identity. An API
+    key resolves only when that path matches the project embedded in the
+    key; a mismatch is a tenant-hidden 404.
 
     Finding the project's org_id from just its id needs the admin
     session regardless of identity kind: `projects` is RLS-scoped by
@@ -128,6 +127,8 @@ async def resolve_project_context(
     """
     if identity.kind == "api_key":
         assert identity.project_id is not None  # guaranteed by resolve_identity
+        if project_id is not None and project_id != identity.project_id:
+            raise TenantNotFoundError(f"no project {project_id}")
         target_project_id = identity.project_id
     else:
         if project_id is None:

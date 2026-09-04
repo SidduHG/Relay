@@ -21,9 +21,12 @@ Dashboard: http://localhost:5173
 
 ## Status
 
-**F0 — Foundations** is scaffolded: one-command stack, typed config, structured JSON logging,
-Alembic wired (no models yet), CI. Everything else (auth, the queue engine, workers, retries,
-scheduling, observability views) is unbuilt — see RELAY-SPEC.md's build order.
+**F0 — Foundations**, **F1 — Authentication & Multi-Tenancy**, and **F2 — Core Queue & Job
+Model** are implemented. F2 provides durable idempotent enqueue, named queue defaults,
+partitioned job history, payload offload, Redis priority-stream indexing, cursor reads,
+cancel, pause/resume, purge confirmation, and optional handler JSON Schema validation.
+Worker execution, retries, scheduling, and observability views begin with F3 — see
+RELAY-SPEC.md's build order.
 
 ## Commands
 
