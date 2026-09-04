@@ -193,10 +193,17 @@ async def test_api_key_identity_resolves_its_own_project_at_fixed_member_role(
         identity = await resolve_identity(issued.secret, secret_key=SECRET, admin_session=admin_s)
     assert identity.kind == "api_key"
 
-    # a different project_id in the "URL" is ignored — the key's own project wins
+    # An API key is bound to exactly one project. A different project in
+    # the URL must be indistinguishable from an unknown project.
+    async with admin_sessions() as admin_s, app_sessions() as app_s:
+        with pytest.raises(TenantNotFoundError):
+            await resolve_project_context(
+                identity, uuid.uuid4(), admin_session=admin_s, app_session=app_s
+            )
+
     async with admin_sessions() as admin_s, app_sessions() as app_s:
         ctx = await resolve_project_context(
-            identity, uuid.uuid4(), admin_session=admin_s, app_session=app_s
+            identity, project_id, admin_session=admin_s, app_session=app_s
         )
     assert ctx.project_id == project_id
     assert ctx.role == Role.MEMBER  # fixed, never looked up

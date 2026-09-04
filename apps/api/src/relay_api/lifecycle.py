@@ -13,13 +13,19 @@ time.
 """
 
 import logging
+import os
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from fastapi import FastAPI
 from relay_db.bootstrap import ensure_default_organization
 from relay_db.connection import create_engine, create_session_factory
 from relay_redis.connection import create_redis_client
+from relay_redis.queues import QueueConfigCache
+from relay_storage import LocalBlobStore
 
 from relay_api.config import settings
 
@@ -42,6 +48,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db_sessions = create_session_factory(engine)
 
     app.state.redis = create_redis_client(settings.redis_url)
+    parsed_store = urlparse(settings.blob_store_url)
+    if parsed_store.scheme != "file":
+        raise ValueError("F2 supports only file:// blob_store_url values")
+    store_path = unquote(parsed_store.path)
+    if os.name == "nt" and re.match(r"^/[A-Za-z]:", store_path):
+        store_path = store_path[1:]
+    app.state.blob_store = LocalBlobStore(Path(store_path))
+    app.state.queue_config_cache = QueueConfigCache(settings.queue_config_cache_seconds)
 
     yield
 
