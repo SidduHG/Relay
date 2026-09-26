@@ -3,6 +3,7 @@
 Self-hosted distributed job queue. Postgres is the source of truth, Redis is the transport.
 
 See [RELAY-SPEC.md](RELAY-SPEC.md) for the full build spec and [ARCHITECTURE.md](ARCHITECTURE.md) for the system design.
+For the behavior implemented today, start with the [current implementation handbook](docs/current-implementation-handbook.md).
 
 ## Quickstart
 
