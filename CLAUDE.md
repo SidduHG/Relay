@@ -6,7 +6,7 @@ Prioritize correctness, architecture consistency, simplicity, maintainability, a
 
 ## Mandatory References
 Before changing relevant code, inspect:
-- `RELAY_SPEC.md`
+- `RELAY-SPEC.md`
 - `ARCHITECTURE.md`
 - `RELAY-production-folder-structure.md`
 Use them to determine expected behavior, system boundaries, interfaces, naming, and file placement.

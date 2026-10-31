@@ -2,6 +2,8 @@
 
 Self-hosted distributed job queue. **Postgres is the source of truth. Redis is a rebuildable index.**
 
+This document describes the target design. Today only the control plane, Postgres, the Redis stream producer, and local blob storage run. Workers, control loops, the WebSocket fan-out, and telemetry export are planned. See the [current implementation handbook](docs/current-implementation-handbook.md) for what exists now.
+
 ---
 
 ## Component diagram
@@ -80,10 +82,10 @@ flowchart TB
 2. **Idempotency key is claimed** in a small unpartitioned table.
 3. **Oversized payload is offloaded** to blob storage, and the row keeps a reference.
 4. **Job row is committed to Postgres.** The job is now durable — everything after this is recoverable.
-5. **Redis is indexed** with a stream entry or a delay-set entry. If this step fails, the reconciler repairs it within a minute.
-6. **A worker claims** the entry via a consumer group read, which is atomic and leaves the entry pending until acknowledged.
-7. **The worker holds a lease** and extends it on every heartbeat while it works.
-8. **Terminal outcome writes to Postgres,** then the stream entry is acknowledged.
+5. **Redis is indexed** with a stream entry or a delay-set entry. If this step fails, the API still returns `201` with `indexed: false`, because the job is durable, and the reconciler repairs the index. Delay-set writes and the reconciler are planned.
+6. **A worker reads** the entry through a consumer group, which leaves it pending until acknowledged. This is only a transport claim.
+7. **The worker claims the row** with a conditional Postgres update from `queued` to `running`. Only the winner runs the handler. It then holds a lease and extends it on every heartbeat.
+8. **Terminal outcome writes to Postgres,** fenced on owner and attempt, then the stream entry is acknowledged.
 
 ---
 
@@ -103,15 +105,21 @@ Only one process runs these at a time, elected by a Postgres advisory lock. If i
 
 ## Redis key layout
 
-| Key shape | Type | Purpose |
-|---|---|---|
-| `q:{queue}:p0..p3` | Stream | Live work, one per priority lane |
-| `q:{queue}:delayed` | Sorted set | Retries, throttled jobs, scheduled jobs |
-| `q:{queue}:rl` | Hash | Token bucket state |
-| `workers` | Sorted set | Heartbeat times — stale detection is one range query |
-| `events:{project}` | Pub/Sub | Feeds the dashboard WebSocket |
+Queue names are unique only inside a project, so every queue key includes the project id. All keys are defined in `packages/redis/src/relay_redis/keys.py`.
 
-Everything above is derivable from Postgres. That is the whole point.
+| Key shape | Type | Purpose | Status |
+|---|---|---|---|
+| `q:{project}:{queue}:p0..p3` | Stream | Live work, one per priority lane | Producer built |
+| `q:{project}:{queue}:paused` | String | Pause flag | Built |
+| `queue:cfg:{project}:{queue}` | Hash, short TTL | Cached queue defaults | Built |
+| `purge:token:{project}:{queue}` | String, short TTL | Purge confirmation hash | Built |
+| `ratelimit:login:*`, `ratelimit:apikey:*` | Counter | Authentication abuse limits | Built |
+| `q:{project}:{queue}:delayed` | Sorted set | Retries, throttled jobs, scheduled jobs | Planned |
+| `q:{project}:{queue}:rl` | Hash | Token bucket state | Planned |
+| `workers` | Sorted set | Heartbeat times, for liveness and diagnostics. The Postgres lease decides reclaim. | Planned |
+| `events:{project}` | Pub/Sub | Feeds the dashboard WebSocket | Planned |
+
+Dispatch state is derivable from Postgres, and the rest is short-lived. That is the whole point.
 
 ---
 
@@ -122,7 +130,7 @@ Everything above is derivable from Postgres. That is the whole point.
 | More throughput | Add worker processes — stateless, horizontally scalable |
 | More enqueue load | Add control-plane replicas behind a load balancer |
 | Postgres write pressure | Batch attempt writes, move history reads to a read replica |
-| Redis memory | Bounded stream trimming plus payload offload; sharding by project is the v2 path |
+| Redis memory | Backlog admission through `max_depth`, trimming only entries safe to remove, and payload offload; sharding by project is the v2 path |
 | Table growth | Monthly partitions, detach and archive rather than delete |
 
 **Deliberately single-region and single-Redis for v1.** Sharding has a documented plan; it is not built.

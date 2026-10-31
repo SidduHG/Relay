@@ -176,7 +176,7 @@ The path names the queue. There is no separate queue creation call: the first su
 
 The call chain is [jobs.py](../apps/api/src/relay_api/api/v1/jobs.py) → [enqueue_service.py](../apps/api/src/relay_api/services/enqueue_service.py) → [enqueue.py](../packages/db/src/relay_db/transactions/enqueue.py) → [producer.py](../packages/redis/src/relay_redis/streams/producer.py). The size/offload behavior is in [payloads.py](../packages/storage/src/relay_storage/payloads.py).
 
-**Important current limits:** an idempotency claim has an expiry timestamp, but no cleanup loop currently expires old claims, so the configured 24-hour window is not yet enforced over time. A future `run_at` creates a `scheduled` database row without a Redis entry; no promoter moves it later. If Redis indexing fails after the PostgreSQL commit, the job remains durable but no reconciler currently repairs that missing entry. These gaps are part of the remaining spec work.
+**Important current limits:** an idempotency claim has an expiry timestamp, but neither the claim query nor a cleanup loop checks it, so a key stays claimed forever instead of for the configured 24 hours. A future `run_at` creates a `scheduled` database row without a Redis entry; no promoter moves it later. If Redis indexing fails after the PostgreSQL commit, the job remains durable but no reconciler currently repairs that missing entry. Each `XADD` uses `MAXLEN ~` with a default of 100,000 per lane, which can remove undelivered entries, and `max_depth` is not enforced. These gaps are part of the remaining spec work.
 
 ### Job states today
 
@@ -217,7 +217,20 @@ Errors from service/domain/storage code become HTTP responses in [error_handler.
 | Frontend | React/Vite home page | Authenticated dashboard, real job/queue API calls, WebSocket live updates |
 | Observability | JSON logging and trace IDs stored from a valid `traceparent` header | Metrics endpoint, distributed spans, trace restoration in a worker |
 
-The design documents describe a future at-least-once engine with promoter, reaper, cron, reconciler, and retention loops. None of those loops exists in the current application. The [worker main](../apps/worker/src/relay_worker/main.py) explicitly leaves fetch, claim/lease, and execution for F3. The frontend [App.tsx](../apps/frontend/src/app/App.tsx) renders only the home page; its activity examples in [HomePage.tsx](../apps/frontend/src/pages/Home/HomePage.tsx) are hard-coded.
+### Known production gaps
+
+These come from reading the code and have not been reproduced under load.
+
+| Gap | Where | Effect |
+| --- | --- | --- |
+| Partitions end on 30 Nov 2026 | `migrations/versions/0004_jobs.py`, `0005_job_attempts.py`; nothing reads `jobs_partition_months_ahead` | Rows land in the default partitions, which then block adding a matching partition |
+| Each API key request writes `last_used_at` | `apps/api/src/relay_api/auth/api_keys.py` | One hot row and one extra commit per request |
+| An admin session stays open for the whole request | `auth/tenancy.py`, `api/deps.py` | Two pooled connections per enqueue, with a default pool of 5 + 10 per engine |
+| The handler schema cache is per process and has no expiry | `services/enqueue_service.py` | Other API replicas keep validating against an old schema |
+| The blob store accepts only `file://` | `lifecycle.py` | Payloads cannot be shared across machines |
+| The reaper would have no lease index | `migrations/versions/0008_job_indexes.py` | A scan of running jobs on each tick |
+
+The design documents describe a future at-least-once engine with promoter, reaper, cron, reconciler, and retention loops. None of those loops exists in the current application. The [worker pool plan](workerPool/plan.md) describes the next step. The [worker main](../apps/worker/src/relay_worker/main.py) explicitly leaves fetch, claim/lease, and execution for F3. The frontend [App.tsx](../apps/frontend/src/app/App.tsx) renders only the home page; its activity examples in [HomePage.tsx](../apps/frontend/src/pages/Home/HomePage.tsx) are hard-coded.
 
 ## 10. Where to make a change
 
@@ -228,6 +241,6 @@ The design documents describe a future at-least-once engine with promoter, reape
 | Queue or job persistence | Relevant service → `packages/db/repositories/` or `transactions/` → `models/` and Alembic migration |
 | Redis key or stream behavior | `packages/redis/keys.py` → producer/cache/limiter → API service call site |
 | Payload size or blob storage | `packages/storage/payloads.py` → `local.py` → API lifecycle configuration |
-| A new worker behavior | Start with F3 in `RELAY-SPEC.md`; the current worker is a shell, so do not infer an existing claim protocol from its folder |
+| A new worker behavior | Start with the [worker pool plan](workerPool/plan.md) and F3 in `RELAY-SPEC.md`; the current worker is a shell, so do not infer an existing claim protocol from its folder |
 
 For orientation, read the focused tests under [apps/api/tests/integration](../apps/api/tests/integration), [tests/integration/postgres](../tests/integration/postgres), and [tests/integration/redis](../tests/integration/redis). The F2 HTTP suite includes a 100-concurrent-submission idempotency case. Integration tests may skip when their database/Redis environment is unavailable; a collected test is not proof that the live stack passed it. CI's declared lint, type, test, and frontend build steps are in [ci.yml](../.github/workflows/ci.yml). No tests were run to produce this handbook.
