@@ -9,6 +9,7 @@ Before changing relevant code, inspect:
 - `RELAY-SPEC.md`
 - `ARCHITECTURE.md`
 - `RELAY-production-folder-structure.md`
+- `.claude/skills/relay-engineering/SKILL.md` for coding, LLD, and production standards
 Use them to determine expected behavior, system boundaries, interfaces, naming, and file placement.
 If a requested implementation conflicts with them, stop and explain the conflict before coding.
 Recommend the technically correct alternative instead of silently creating an exception.
