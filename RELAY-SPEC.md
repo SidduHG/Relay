@@ -1,6 +1,7 @@
 # RELAY — Distributed Job Queue Engine
 
 **Build spec v2.** Self-hosted background job platform.
+This spec describes the finished system. For what runs today, see [the implementation handbook](docs/current-implementation-handbook.md).
 Postgres is the source of truth. Redis is the hot transport. Python worker pool. FastAPI control plane. React observability dashboard.
 
 **Stack:** FastAPI · Redis 7 Streams · PostgreSQL 15+ · React + TypeScript · WebSocket · OpenTelemetry
@@ -19,7 +20,7 @@ A job runs at least once. Under crashes it may run twice. Handlers must be idemp
 Unknown handler, oversized payload, bad schema, repeated worker crashes — the job goes to a `parked` state a human can inspect. Nothing is ever silently discarded.
 
 **P4 — Everything must survive `kill -9` at any instant.**
-Any component, any moment. The system must return to a consistent state within one reaper cycle.
+Any component, any moment. A crash cannot be recognized until its lease expires, so the system must return to a consistent state within one lease period plus one reaper cycle.
 
 **P5 — No state change without a row write and a metric.**
 If it happened, it's in Postgres and it's on a graph.
@@ -95,7 +96,7 @@ The minimum viable engine. Enqueue in, execute out — but with the write orderi
 2. **Per-queue defaults.** Max attempts, job timeout, lease duration, default priority, rate limit, max depth.
 3. **Job record.** Handler name, JSON payload, metadata, priority, attempt counters, timing fields, trace id, who enqueued it.
 4. **Enqueue write order — this order is not negotiable.** Claim the idempotency key, offload the payload if oversized, insert the job row, commit the Postgres transaction, *then* index into Redis. If the Redis step fails the job is already durable and the reconciler will pick it up.
-5. **Transport.** Redis Streams with consumer groups, one stream per queue per priority lane. Streams are trimmed to a bounded length; Postgres holds all history.
+5. **Transport.** Redis Streams with consumer groups, one stream per queue per priority lane. Stream size is bounded by backlog admission, and only entries that are safe to remove are trimmed. Unread or pending work is never trimmed. Postgres holds all history.
 6. **Read endpoints.** Fetch a job by id with its full attempt history. List jobs with filters on status, handler, queue and date, using cursor pagination.
 
 **Must handle**
@@ -120,7 +121,7 @@ The execution layer. This is where the lease mechanic lives, and the lease is th
 1. **Registration on boot.** Worker id, host, PID, version, concurrency, and a manifest of which handlers it can run.
 2. **Fetch loop.** Drain priority lanes in strict order. Non-blocking reads on the top three lanes, then a short blocking read on the lowest lane so an idle worker parks instead of spinning.
 3. **Claim sets a lease.** On claim the job gets a lease deadline, default 60 seconds, configurable per queue.
-4. **Heartbeat every 5 seconds.** The heartbeat does two things: refreshes the worker's liveness entry, and **extends the lease on every job that worker currently holds**, in a single round trip.
+4. **Heartbeat every 5 seconds.** The heartbeat does two things: refreshes the worker's liveness entry in Redis, and **extends the lease on every job that worker currently holds** in one batched Postgres transaction. These are two stores, so this is not one atomic step. The Postgres lease decides reclaim; Redis liveness is diagnostic.
 5. **Concurrency slots.** Configurable per worker. Async slots for I/O-bound handlers, a process pool for CPU-bound ones.
 6. **Per-job timeout enforced by the worker itself.** Soft cancel first, ten-second grace, then hard kill. The worker records the timeout outcome — the reaper should not be the one discovering it.
 7. **Graceful shutdown on SIGTERM.** Stop fetching, let in-flight jobs finish up to a grace period, return the remainder to the queue, deregister, exit clean.
@@ -281,7 +282,7 @@ The part that makes it demo-able. Build the telemetry before the UI, because the
 
 - **Trace propagation is the headline.** Almost no portfolio job queue carries a trace across the async boundary. This is the detail that gets remembered.
 - **Throttle rendering to about ten frames per second.** At five thousand jobs per second a naive live feed locks the browser tab. Buffer events and flush on an interval.
-- **Reconnect properly.** Exponential backoff, resume from the last seen event id, and refetch state on reconnect rather than assuming the delta stream had no gaps.
+- **Reconnect properly.** Exponential backoff, then refetch state on reconnect rather than assuming the delta stream had no gaps. Redis Pub/Sub keeps no history, so events missed during a disconnect cannot be resumed.
 - **Group the DLQ.** Fifty thousand dead jobs from one bug is one problem, not fifty thousand rows.
 - **Cursor pagination everywhere,** never offset — offset pagination on a large jobs table gets slower the further you scroll.
 - Empty, loading and error states on every view. It's the thing everyone skips and every reviewer notices.
@@ -310,7 +311,7 @@ The part that makes it demo-able. Build the telemetry before the UI, because the
 
 | Component down | Behaviour |
 |---|---|
-| Redis | Enqueue fails fast with 503; committed jobs safe; recovery via reconciler |
+| Redis | Enqueue commits to Postgres and returns 201 with `indexed: false` after short retries; committed jobs safe; recovery via reconciler |
 | Postgres | Enqueue 503; workers finish in-flight then idle; nothing lost |
 | Leader | Loops pause briefly; a replica takes the lock and resumes; no double-fire |
 | One worker | Its leases expire, reaper requeues, throughput dips |
@@ -346,7 +347,7 @@ State this in the README. Knowing what you left out reads as judgement, not as g
 
 **Deferred by design**
 - Multi-region and cross-datacenter replication — single region only
-- Redis Cluster sharding — one Redis with append-only persistence and a replica; sharding is a v2 problem with a documented plan
+- Redis Cluster sharding — one Redis with a replica, with append-only persistence enabled only after the wipe drill passes without it; sharding is a v2 problem with a documented plan
 - Non-Python workers — the wire protocol is documented so a Go or Node worker is possible, but not shipping one
 - Billing, quotas and usage metering — the `organizations` tier they anchor to ships in F1, but nothing meters or charges in v1
 - Platform staff administration — no cross-org operator role. When it lands it gets its own credentials, mandatory MFA, and time-boxed impersonation logged to an audit the customer can read. Never an `is_superuser` flag on `users`

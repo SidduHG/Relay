@@ -373,6 +373,8 @@ There is deliberately no `lease:{job_id}` key at any point. The lease deadline l
 
 ### Bounded trimming, concretely
 
+> **Correction.** This section records the F2 decision, which the worker pool plan supersedes. `MAXLEN` also removes entries nobody has read, and those rows keep `redis_indexed_at` set, so the drift index cannot find them. The blind `MAXLEN ~` must be removed before a consumer is enabled. See [Recovery and stream-retention design](../workerPool/plan.md).
+
 Every `XADD` carries `MAXLEN ~ {queue_stream_maxlen}` (default 100,000, per lane).
 
 **The `~` is not decoration.** Exact `MAXLEN` makes Redis delete entry by entry until the count is met, so a stream that has drifted far over the cap pays a latency spike proportional to the overshoot — on the enqueue hot path, which has a 25 ms p99 budget. Approximate trimming removes whole macro-nodes only when it can do so without splitting one, which is O(1) amortized and never spikes.
@@ -555,8 +557,8 @@ A model validator asserts `payload_inline_max_bytes < payload_max_bytes` — inv
 
 **Redis wiped.** Streams, pause flags, config caches and outstanding purge tokens are all gone. Everything is derivable, which is the point of P1 — but two things deserve naming:
 
-1. Every `queued` job still says `state = 'queued'` with `redis_indexed_at` set, which is now a lie. F2's contribution to the rebuild is the drift index (`WHERE redis_indexed_at IS NULL AND state='queued'`) plus `JobRepo.list_queued_for_reindex(...)`, so the reconciler's input is one index scan rather than a sequential scan of fifty million rows. The reconciler loop itself is F10's.
-2. **The pause flags come back too, or a wipe silently un-pauses every paused queue** — during an incident, which is the only time queues are paused. `QueueRepo.list_paused()` exists in F2 for exactly this, and restoring pause flags is listed as a required step of the wipe drill rather than left to be discovered when a drained-on-purpose queue starts draining again.
+1. Every `queued` job still says `state = 'queued'` with `redis_indexed_at` set, which is now a lie. The drift index (`WHERE redis_indexed_at IS NULL AND state='queued'`) therefore cannot find these rows. It only covers jobs that were never indexed. A wipe needs a generation marker in Redis and a full rebuild of queued jobs using `ix_jobs_dispatch`. `JobRepo.list_queued_for_reindex(...)` was planned here but was not implemented.
+2. **The pause flags come back too, or a wipe silently un-pauses every paused queue** — during an incident, which is the only time queues are paused. `QueueRepo.list_paused()` was planned for exactly this but was not implemented, so F3's reconciler must add it. Restoring pause flags is listed as a required step of the wipe drill rather than left to be discovered when a drained-on-purpose queue starts draining again.
 
 **Redis down at enqueue.** Three retries at 50/100/200 ms after the commit, then **201** with `indexed: false` and a counter incremented. The job is durable; only its dispatch is delayed. Reasoned through above.
 
@@ -590,7 +592,7 @@ A model validator asserts `payload_inline_max_bytes < payload_max_bytes` — inv
 | **F8 — limits** | `queues.rate_limit_per_second` and `queues.max_depth` stored, bounded, validated and served; the dispatch partial index that makes a depth count one index scan | the token bucket, the depth check, 429 at enqueue, the concurrency cap, the circuit breaker |
 | **F9 — observability** | `trace_id`, `span_id`, `trace_flags` parsed from the enqueueing request's `traceparent` and stored on the job | span creation, the OTel exporter, `events:{project}`, the WebSocket fan-out, metrics |
 | **F10 — partitions & retention** | both big tables partitioned from birth, three months pre-created, a DEFAULT partition, RLS on every partition, DDL confined to migrations running as `relay`, `idempotency_keys.expires_at` | the retention loop, partition detach/archive, `scripts/db/partition.sh`, `redis.conf` |
-| **F10 — reconciler** | `redis_indexed_at`, the drift partial index, `QueueRepo.list_paused()` | the reconciler loop |
+| **Reconciler** (now scheduled with F3) | `redis_indexed_at`, the drift partial index, `queues.paused_at` | the reconciler loop, `QueueRepo.list_paused()`, and a Redis generation marker |
 
 ## Task order
 

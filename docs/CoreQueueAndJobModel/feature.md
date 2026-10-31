@@ -13,7 +13,7 @@
 
 **An enqueue write order that is the feature.** Claim the idempotency key, offload an oversized payload, insert the job row, commit Postgres, *then* index into Redis. The commit is the durability line: everything before it fails clean and leaves nothing behind, everything after it is a lagging index the reconciler repairs.
 
-**Redis Streams as transport, one stream per queue per priority lane.** Streams, not lists, because a list pop removes the job before the claim can be recorded — a worker dying in that gap loses the job with no trace anywhere. A stream entry stays in the consumer group's pending list until it is acknowledged, and a stale one can be auto-claimed. Streams are trimmed to a bounded length; the entry carries only a job id, so trimming costs a dispatch pointer, never data.
+**Redis Streams as transport, one stream per queue per priority lane.** Streams, not lists, because a list pop removes the job before the claim can be recorded — a worker dying in that gap loses the job with no trace anywhere. A stream entry stays in the consumer group's pending list until it is acknowledged, and a stale one can be auto-claimed. The entry carries only a job id, so losing one costs a dispatch pointer, never data. F2's producer still trims with `MAXLEN ~`, which can remove undelivered entries, so the [worker pool plan](../workerPool/plan.md) replaces it before a consumer is enabled.
 
 **Read endpoints built for a table that will hold fifty million rows.** A job by id with its full attempt history, and a job list filtered by status, handler, queue and date with cursor pagination — never offset. The cursor is an immutable `(created_at, id)` pair, so a page boundary cannot shift under a concurrent insert and page 10,000 costs what page 1 costs.
 
@@ -66,7 +66,7 @@ An API key is fixed at project Member, so **pause, resume, purge, queue defaults
 | No cross-tenant read, ever | Every F2 table carries `project_id` and no `org_id`, sits under FORCEd row-level security including on each partition, and is reachable only through a scoped unit of work. The same two independent layers F1 proved. |
 | An illegal state change cannot be written | The domain rejects illegal edges; every write is a compare-and-set on the current state, so a stale transition fails even when it is legal in the abstract. |
 | Nothing is dropped | Oversized-at-submit is rejected synchronously to a caller who can react. Anything discovered oversized, unhandled or poisonous later parks. |
-| A wipe of Redis loses nothing | Streams, pause flags and caches are all derived. The job row records whether it was indexed, so the rebuild is one index scan rather than a scan of the whole table. |
+| A wipe of Redis loses nothing | Streams, pause flags and caches are all derived. The row's `redis_indexed_at` finds jobs that were never indexed, but it stays set after a wipe, so a wipe needs a full rebuild of queued jobs, detected by a Redis generation marker. |
 
 ## Targets
 
